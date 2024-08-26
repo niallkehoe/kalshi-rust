@@ -16,8 +16,6 @@ The Sample Bot directory is an example script that completes all the tasks requi
 
 ### HTTP Requests: ✅ 
 As of now the project supports interacting with Kalshi's RESTful API **fully**.
-The only features missing from that part of the project are as follows:
-- Advanced API features (Waiting for the devs to give me access)
 
 However any user of this library can build a rust trading bot using this library 
 if they wish!
