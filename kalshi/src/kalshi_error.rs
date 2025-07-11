@@ -18,6 +18,8 @@ pub enum KalshiError {
     UserInputError(String),
     /// Errors representing unexpected internal issues or situations that are not supposed to happen.
     InternalError(String),
+    /// Authentication errors, such as missing credentials or invalid keys.
+    Auth(String),
     // TODO: add error type specifically for joining threads together.
 }
 
@@ -26,7 +28,8 @@ impl fmt::Display for KalshiError {
         match self {
             KalshiError::RequestError(e) => write!(f, "HTTP Error: {}", e),
             KalshiError::UserInputError(e) => write!(f, "User Input Error: {}", e),
-            KalshiError::InternalError(e) => write!(f, "INTERNAL ERROR, PLEASE EMAIL DEVELOPER OR MAKE A NEW ISSUE ON THE CRATE'S REPOSITORY: https://github.com/dpeachpeach/kalshi-rust. Specific Error: {}", e)
+            KalshiError::InternalError(e) => write!(f, "INTERNAL ERROR, PLEASE EMAIL DEVELOPER OR MAKE A NEW ISSUE ON THE CRATE'S REPOSITORY: https://github.com/dpeachpeach/kalshi-rust. Specific Error: {}", e),
+            KalshiError::Auth(e) => write!(f, "Authentication Error: {}", e)
         }
     }
 }
@@ -37,6 +40,7 @@ impl Error for KalshiError {
             KalshiError::RequestError(e) => Some(e),
             KalshiError::UserInputError(_) => None,
             KalshiError::InternalError(_) => None,
+            KalshiError::Auth(_) => None,
         }
     }
 }
@@ -113,5 +117,29 @@ impl Error for RequestError {
             RequestError::ServerError(e) => Some(e),
             RequestError::SerializationError(e) => Some(e),
         }
+    }
+}
+
+impl From<std::io::Error> for KalshiError {
+    fn from(err: std::io::Error) -> Self {
+        KalshiError::Auth(format!("IO Error: {}", err))
+    }
+}
+
+impl From<openssl::error::ErrorStack> for KalshiError {
+    fn from(err: openssl::error::ErrorStack) -> Self {
+        KalshiError::Auth(format!("OpenSSL Error: {}", err))
+    }
+}
+
+impl From<reqwest::header::InvalidHeaderValue> for KalshiError {
+    fn from(err: reqwest::header::InvalidHeaderValue) -> Self {
+        KalshiError::Auth(format!("Invalid Header Value: {}", err))
+    }
+}
+
+impl From<http::method::InvalidMethod> for KalshiError {
+    fn from(err: http::method::InvalidMethod) -> Self {
+        KalshiError::Auth(format!("Invalid HTTP Method: {}", err))
     }
 }

@@ -22,7 +22,7 @@
 //! use kalshi::Kalshi;
 //! use kalshi::TradingEnvironment;
 //!
-//! let kalshi_instance = Kalshi::new(TradingEnvironment::DemoMode);
+//! let kalshi_instance = Kalshi::new(TradingEnvironment::DemoMode, "your-key-id", "path/to/private.pem").await?;
 //! ```
 //!
 //! ## Quick Start Guide
@@ -33,23 +33,18 @@
 //! kalshi = { version = "0.9"}
 //! ```
 //!
-//! Initialize the Kalshi Struct and login using your authentication details:
-//! - **IMPORTANT**:  A user's authentication token expires every thirty minutes, this means
-//! that you'll need to call the login function every thirty minutes in order to
-//! ensure that you remain authenticated with a valid token.
-//! - Storing user / password information in plaintext is not recommended,
-//! an implementation of extracting user details from local environmental variables
+//! Initialize the Kalshi Struct with key-based authentication:
+//! - **IMPORTANT**:  The authentication is handled automatically when creating a new instance.
+//! - Store your key ID and private key file securely, an implementation of extracting these from local environmental variables
 //! is available [here](https://github.com/dpeachpeach/kalshi-rust/blob/main/sample_bot/src/main.rs#L12)
 //! ```
 //! use kalshi::Kalshi;
 //! use kalshi::TradingEnvironment;
 //!
-//! let username = "johndoe@example.com";
-//! let password = "example_password";
+//! let key_id = "your-key-id";
+//! let pem_path = "path/to/private.pem";
 //!
-//! let mut kalshi_instance = Kalshi::new(TradingEnvironment::DemoMode);
-//!
-//! kalshi_instance.login(username, password).await?;
+//! let kalshi_instance = Kalshi::new(TradingEnvironment::DemoMode, key_id, pem_path).await?;
 //! ```
 //!
 //! After logging in, you can call any method present in the crate without issue.
@@ -90,7 +85,7 @@
 //! ```
 //! use kalshi::Kalshi;
 //! use kalshi::TradingEnvironment;
-//! let kalshi_instance = Kalshi::new(TradingEnvironment::DemoMode);
+//! let kalshi_instance = Kalshi::new(TradingEnvironment::DemoMode, "your-key-id", "path/to/private.pem").await?;
 //!
 //! kalshi_instance.get_exchange_status().await.unwrap();
 //! ```
@@ -100,7 +95,7 @@
 //! ```
 //! use kalshi::Kalshi;
 //! use kalshi::TradingEnvironment;
-//! let kalshi_instance = Kalshi::new(TradingEnvironment::DemoMode);
+//! let kalshi_instance = Kalshi::new(TradingEnvironment::DemoMode, "your-key-id", "path/to/private.pem").await?;
 //!
 //! kalshi_instance.get_multiple_events(Some(5), None, None, None, None).await.unwrap();
 //! ```
@@ -109,7 +104,7 @@
 //! ```
 //! use kalshi::Kalshi;
 //! use kalshi::TradingEnvironment;
-//! let kalshi_instance = Kalshi::new(TradingEnvironment::DemoMode);
+//! let kalshi_instance = Kalshi::new(TradingEnvironment::DemoMode, "your-key-id", "path/to/private.pem").await?;
 //!
 //! kalshi_instance.get_balance();
 //! ```
@@ -131,6 +126,9 @@ pub use portfolio::*;
 
 // imports
 use reqwest;
+use openssl::pkey::{PKey, Private};
+use std::fs;
+use std::path::Path;
 
 /// The Kalshi struct is the core of the kalshi-crate. It acts as the interface
 /// between the user and the market, abstracting away the meat of requests
@@ -142,78 +140,62 @@ use reqwest;
 /// use kalshi::Kalshi;
 /// use kalshi::TradingEnvironment;
 ///
-/// let kalshi_instance = Kalshi::new(TradingEnvironment::DemoMode);
+/// let kalshi_instance = Kalshi::new(TradingEnvironment::DemoMode, "your-key-id", "path/to/private.pem").await?;
 /// ```
 ///
 ///
 #[derive(Debug, Clone)]
+
 pub struct Kalshi {
     /// - `base_url`: The base URL for the API, determined by the trading environment.
     base_url: String,
-    /// - `curr_token`: A field for storing the current authentication token.
-    curr_token: Option<String>,
-    /// - `member_id`: A field for storing the member ID.
-    member_id: Option<String>,
+    /// - `key_id`: Key ID for key-based authentication
+    key_id: String,
+    /// - `private_key`: Private key for key-based authentication
+    private_key: PKey<Private>,
     /// - `client`: The HTTP client used for making requests to the marketplace.
     client: reqwest::Client,
 }
 
 impl Kalshi {
-    /// Creates a new instance of Kalshi with the specified trading environment.
+    /// Creates a new instance of Kalshi with the specified trading environment and authenticates immediately.
     /// This environment determines the base URL used for API requests.
     ///
     /// # Arguments
     ///
-    /// * `trading_env` - The trading environment to be used (LiveMarketMode: Trading with real money. DemoMode: Paper Trading).
+    /// * `trading_env` - The trading environment to be used (ProdMode: Trading with real money. DemoMode: Paper Trading).
+    /// * `key_id` - The UUID shown next to the key in your Kalshi UI
+    /// * `pem_path` - Path to the private key file you downloaded
     ///
     /// # Example
     ///
-    /// ## Creating a Demo instance.
+    /// ## Creating a Demo instance with authentication.
     /// ```
     /// use kalshi::{Kalshi, TradingEnvironment};
-    /// let kalshi = Kalshi::new(TradingEnvironment::DemoMode);
+    /// let kalshi = Kalshi::new(TradingEnvironment::DemoMode, "your-key-id", "path/to/private.pem").await?;
     /// ```
     ///
-    /// ## Creating a Live Trading instance (Warning, you're using real money!)
+    /// ## Creating a Live Trading instance with authentication (Warning, you're using real money!)
     /// ```
     /// use kalshi::{Kalshi, TradingEnvironment};
-    /// let kalshi = Kalshi::new(TradingEnvironment::LiveMarketMode);
+    /// let kalshi = Kalshi::new(TradingEnvironment::ProdMode, "your-key-id", "path/to/private.pem").await?;
     /// ```
     ///
-    pub fn new(trading_env: TradingEnvironment) -> Kalshi {
-        return Kalshi {
+    pub async fn new(trading_env: TradingEnvironment, key_id: &str, pem_path: &str) -> Result<Self, crate::kalshi_error::KalshiError> {
+        // Load the private key first
+        let pem = fs::read(Path::new(pem_path))?;
+        let private_key = PKey::private_key_from_pem(&pem)?;
+        
+        let kalshi = Self {
             base_url: utils::build_base_url(trading_env).to_string(),
-            curr_token: None,
-            member_id: None,
+            key_id: key_id.to_string(),
+            private_key,
             client: reqwest::Client::new(),
         };
-    }
-
-    /// Retrieves the current user authentication token, if available.
-    ///
-    /// # Returns
-    ///
-    /// Returns an `Option<String>` containing the authentication token. If no token
-    /// is currently stored, it returns `None`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use kalshi::{Kalshi, TradingEnvironment};
-    /// let kalshi = Kalshi::new(TradingEnvironment::DemoMode);
-    /// let token = kalshi.get_user_token();
-    /// if let Some(t) = token {
-    ///     println!("Current token: {}", t);
-    /// } else {
-    ///     println!("No token found");
-    /// }
-    /// ```
-    ///
-    pub fn get_user_token(&self) -> Option<String> {
-        match &self.curr_token {
-            Some(val) => return Some(val.clone()),
-            _ => return None,
-        }
+        
+        // Verify authentication by hitting the exchange status endpoint
+        kalshi.get_exchange_status().await?;
+        Ok(kalshi)
     }
 }
 
@@ -232,5 +214,5 @@ pub enum TradingEnvironment {
 
     /// The live market mode is the real trading environment where all transactions involve actual financial stakes.
     /// Use this mode for actual trading activities with real money.
-    LiveMarketMode,
+    ProdMode,
 }

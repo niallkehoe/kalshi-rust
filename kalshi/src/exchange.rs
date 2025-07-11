@@ -59,8 +59,8 @@ impl Kalshi {
 /// Represents the standard trading hours and maintenance windows of the exchange.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ExchangeScheduleStandard {
-    pub standard_hours: StandardHours,
-    pub maintenance_windows: Vec<String>,
+    pub standard_hours: Vec<StandardHours>,
+    pub maintenance_windows: Vec<MaintenanceWindow>,
 }
 
 /// Internal struct used for deserializing the response from the exchange schedule endpoint.
@@ -76,16 +76,25 @@ pub struct ExchangeStatus {
     pub exchange_active: bool,
 }
 
+/// Represents a maintenance window with start and end times.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct MaintenanceWindow {
+    pub start_datetime: String,
+    pub end_datetime: String,
+}
+
 /// Contains the daily schedule for each day of the week.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct StandardHours {
-    pub monday: DaySchedule,
-    pub tuesday: DaySchedule,
-    pub wednesday: DaySchedule,
-    pub thursday: DaySchedule,
-    pub friday: DaySchedule,
-    pub saturday: DaySchedule,
-    pub sunday: DaySchedule,
+    pub start_time: String,
+    pub end_time: String,
+    pub monday: Vec<DaySchedule>,
+    pub tuesday: Vec<DaySchedule>,
+    pub wednesday: Vec<DaySchedule>,
+    pub thursday: Vec<DaySchedule>,
+    pub friday: Vec<DaySchedule>,
+    pub saturday: Vec<DaySchedule>,
+    pub sunday: Vec<DaySchedule>,
 }
 
 /// Represents the opening and closing times of the exchange for a single day.

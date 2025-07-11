@@ -1,84 +1,89 @@
-use super::Kalshi;
-use crate::kalshi_error::*;
-use serde::{Deserialize, Serialize};
+use chrono::Utc;
+use openssl::{
+    hash::MessageDigest,
+    pkey::{PKey, Private},
+    rsa::Padding,
+    sign::{RsaPssSaltlen, Signer},
+};
+use reqwest::header::{HeaderMap, HeaderValue};
+use std::{fs, path::Path};
+use base64::Engine;
 
-impl<'a> Kalshi {
-    /// Asynchronously logs a user into the Kalshi exchange.
-    ///
-    /// This method sends a POST request to the Kalshi exchange's login endpoint with the user's credentials.
-    /// On successful authentication, it updates the current session's token and member ID.
-    ///
-    /// # Arguments
-    /// * `user` - A string slice representing the user's email.
-    /// * `password` - A string slice representing the user's password.
-    ///
-    /// # Returns
-    /// - `Ok(())`: Empty result indicating successful login.
-    /// - `Err(KalshiError)`: Error in case of a failure in the HTTP request or response parsing.
-    ///
-    /// # Example
-    /// ```
-    /// kalshi_instance.login("johndoe@example.com", "example_password").await?;
-    /// ```
-    pub async fn login(&mut self, user: &str, password: &str) -> Result<(), KalshiError> {
-        let login_url: &str = &format!("{}/login", self.base_url.to_string());
+use crate::kalshi_error::KalshiError;
+use crate::Kalshi; // struct defined in lib.rs
 
-        let login_payload = LoginPayload {
-            email: user.to_string(),
-            password: password.to_string(),
-        };
+impl Kalshi {
 
-        let result: LoginResponse = self
-            .client
-            .post(login_url)
-            .json(&login_payload)
-            .send()
-            .await?
-            .json()
-            .await?;
-
-        self.curr_token = Some(format!("Bearer {}", result.token));
-        self.member_id = Some(result.member_id);
-
-        return Ok(());
-    }
-
-    /// Asynchronously logs a user out of the Kalshi exchange.
-    ///
-    /// Sends a POST request to the Kalshi exchange's logout endpoint. This method
-    /// should be called to properly terminate the session initiated by `login`.
-    ///
-    /// # Returns
-    /// - `Ok(())`: Empty result indicating successful logout.
-    /// - `Err(KalshiError)`: Error in case of a failure in the HTTP request.
-    ///
-    /// # Examples
-    /// ```
-    /// kalshi_instance.logout().await?;
-    /// ```
+    /// “Logout” for the key-based scheme – just delete the key material.
     pub async fn logout(&self) -> Result<(), KalshiError> {
-        let logout_url: &str = &format!("{}/logout", self.base_url.to_string());
-
-        self.client
-            .post(logout_url)
-            .header("Authorization", self.curr_token.clone().unwrap())
-            .header("content-type", "application/json".to_string())
-            .send()
-            .await?;
-
-        return Ok(());
+        // TODO: implement logout
+        // Nothing to tell the server.  Caller can simply drop the client.
+        Ok(())
     }
-}
 
-// used in login method
-#[derive(Debug, Serialize, Deserialize)]
-struct LoginResponse {
-    member_id: String,
-    token: String,
-}
-// used in login method
-#[derive(Debug, Serialize, Deserialize)]
-struct LoginPayload {
-    email: String,
-    password: String,
+    // -----------------------------------------------------------------------
+    //  Helpers used by the other modules (signing + generic request)
+    // -----------------------------------------------------------------------
+
+    pub(crate) async fn signed_get<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<T, KalshiError> {
+        self.signed_request::<(), T>("GET", path, None).await
+    }
+
+    pub(crate) async fn signed_post<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, KalshiError> {
+        self.signed_request("POST", path, Some(body)).await
+    }
+
+    async fn signed_request<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&B>,
+    ) -> Result<T, KalshiError> {
+        let key_id = &self.key_id;
+        let pkey = &self.private_key;
+
+        let ts_ms = Utc::now().timestamp_millis();
+        let message = format!("{ts_ms}{method}{path}");
+
+        // --- RSA-PSS / SHA-256 signature -----------------------------------
+        let mut signer = Signer::new(MessageDigest::sha256(), pkey)?;
+        signer.set_rsa_padding(Padding::PKCS1_PSS)?;
+        signer.set_rsa_pss_saltlen(RsaPssSaltlen::DIGEST_LENGTH)?;
+        signer.update(message.as_bytes())?;
+        let sig_raw = signer.sign_to_vec()?;
+        let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig_raw);
+
+        // --- build request --------------------------------------------------
+        let url = format!("{}{}", self.base_url, path);
+        let mut headers = HeaderMap::with_capacity(3);
+        headers.insert("KALSHI-ACCESS-KEY", HeaderValue::from_str(key_id)?);
+        headers.insert("KALSHI-ACCESS-TIMESTAMP", HeaderValue::from(ts_ms));
+        headers.insert("KALSHI-ACCESS-SIGNATURE", HeaderValue::from_str(&sig_b64)?);
+
+        let builder = match method {
+            "GET" => self.client.get(&url),
+            "POST" => self.client.post(&url),
+            "PUT" => self.client.put(&url),
+            "DELETE" => self.client.delete(&url),
+            other => self.client.request(other.parse()?, &url),
+        }
+        .headers(headers);
+
+        let resp = if let Some(b) = body {
+            builder.json(b).send().await?
+        } else {
+            builder.send().await?
+        }
+        .error_for_status()?;
+
+        Ok(resp.json::<T>().await?)
+    }
+
 }
