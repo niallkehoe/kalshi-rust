@@ -20,7 +20,7 @@ As of now the project supports interacting with Kalshi's RESTful API **fully**.
 However any user of this library can build a rust trading bot using this library 
 if they wish!
 
-Every function present in the library wraps around the [Kalshi Trading API](https://trading-api.readme.io/reference/getting-started).
+Every function present in the library wraps around the Kalshi Trading API
 
 #### HTTP Feature Table
 

@@ -40,6 +40,13 @@ impl Kalshi {
         self.signed_request("POST", path, Some(body)).await
     }
 
+    pub(crate) async fn signed_delete<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<T, KalshiError> {
+        self.signed_request::<(), T>("DELETE", path, None).await
+    }
+
     async fn signed_request<B: serde::Serialize, T: serde::de::DeserializeOwned>(
         &self,
         method: &str,
@@ -50,7 +57,10 @@ impl Kalshi {
         let pkey = &self.private_key;
 
         let ts_ms = Utc::now().timestamp_millis();
-        let message = format!("{ts_ms}{method}{path}");
+        
+        // Remove query parameters from path (like Python code does)
+        let path_without_query = path.split('?').next().unwrap_or(path);
+        let message = format!("{ts_ms}{method}/trade-api/v2{path_without_query}");
 
         // --- RSA-PSS / SHA-256 signature -----------------------------------
         let mut signer = Signer::new(MessageDigest::sha256(), pkey)?;

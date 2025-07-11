@@ -17,7 +17,7 @@ impl Kalshi {
     /// ```
     pub async fn get_exchange_status(&self) -> Result<ExchangeStatus, KalshiError> {
         let exchange_status_url: &str = &format!("{}/exchange/status", self.base_url.to_string());
-
+        
         let result: ExchangeStatus = self
             .client
             .get(exchange_status_url)
