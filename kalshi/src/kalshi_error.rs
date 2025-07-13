@@ -143,3 +143,15 @@ impl From<http::method::InvalidMethod> for KalshiError {
         KalshiError::Auth(format!("Invalid HTTP Method: {}", err))
     }
 }
+
+impl From<url::ParseError> for KalshiError {
+    fn from(err: url::ParseError) -> Self {
+        KalshiError::UserInputError(format!("URL Parse Error: {}", err))
+    }
+}
+
+impl From<serde_urlencoded::ser::Error> for KalshiError {
+    fn from(err: serde_urlencoded::ser::Error) -> Self {
+        KalshiError::UserInputError(format!("URL Encoding Error: {}", err))
+    }
+}

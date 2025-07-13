@@ -112,15 +112,19 @@
 #[macro_use]
 mod utils;
 mod auth;
+mod collection;
 mod exchange;
 mod kalshi_error;
 mod market;
+mod milestone;
 mod portfolio;
 
-pub use auth::*;
+// pub use auth::*;  // Unused import
+pub use collection::*;
 pub use exchange::*;
 pub use kalshi_error::*;
 pub use market::*;
+pub use milestone::*;
 pub use portfolio::*;
 
 // imports
@@ -238,6 +242,7 @@ impl Kalshi {
 /// This enum is used to specify whether the interaction with the Kalshi API should be in a demo (simulated) environment
 /// or in the live market with real financial transactions.
 ///
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TradingEnvironment {
     /// The demo mode represents a simulated environment where trades do not involve real money.
     /// This mode is typically used for testing and practice purposes.

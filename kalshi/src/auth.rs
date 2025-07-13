@@ -1,12 +1,10 @@
 use chrono::Utc;
 use openssl::{
     hash::MessageDigest,
-    pkey::{PKey, Private},
     rsa::Padding,
     sign::{RsaPssSaltlen, Signer},
 };
 use reqwest::header::{HeaderMap, HeaderValue};
-use std::{fs, path::Path};
 use base64::Engine;
 
 use crate::kalshi_error::KalshiError;
@@ -45,6 +43,14 @@ impl Kalshi {
         path: &str,
     ) -> Result<T, KalshiError> {
         self.signed_request::<(), T>("DELETE", path, None).await
+    }
+
+    pub(crate) async fn signed_put<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: Option<&B>,
+    ) -> Result<T, KalshiError> {
+        self.signed_request("PUT", path, body).await
     }
 
     async fn signed_request<B: serde::Serialize, T: serde::de::DeserializeOwned>(

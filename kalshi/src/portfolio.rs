@@ -69,7 +69,7 @@ impl<'a> Kalshi {
         event_ticker: Option<String>,
         min_ts: Option<i64>,
         max_ts: Option<i64>,
-        status: Option<String>,
+        status: Option<OrderStatus>,
         limit: Option<i32>,
         cursor: Option<String>,
     ) -> Result<(Option<String>, Vec<Order>), KalshiError> {
@@ -81,7 +81,7 @@ impl<'a> Kalshi {
         add_param!(params, "min_ts", min_ts);
         add_param!(params, "max_ts", max_ts);
         add_param!(params, "event_ticker", event_ticker);
-        add_param!(params, "status", status);
+        add_param!(params, "status", status.map(|s| s.to_string()));
 
         let path = if params.is_empty() {
             format!("{}/orders", PORTFOLIO_PATH)
@@ -157,6 +157,9 @@ impl<'a> Kalshi {
     }
     /// Decreases the size of an existing order on the Kalshi exchange.
     ///
+    /// **Endpoint:**  
+    /// `POST /portfolio/orders/{order_id}/decrease` (v2)
+    ///
     /// This method allows reducing the size of an order either by specifying the amount to reduce
     /// (`reduce_by`) or setting a new target size (`reduce_to`). A valid authentication token is
     /// required for this operation. It's important to provide either `reduce_by` or `reduce_to`,
@@ -176,10 +179,11 @@ impl<'a> Kalshi {
     ///
     /// # Example
     ///
-    /// ```
-    /// // Assuming `kalshi_instance` is an already authenticated instance of `Kalshi`
-    /// let order_id = "some_order_id";
-    /// let decrease_result = kalshi_instance.decrease_order(order_id, Some(5), None).await.unwrap();
+    /// ```rust
+    /// // shrink order ABC123 by 5 contracts
+    /// let order = kalshi_instance
+    ///     .decrease_order("ABC123", Some(5), None)
+    ///     .await?;
     /// ```
     ///
     pub async fn decrease_order(
@@ -209,404 +213,334 @@ impl<'a> Kalshi {
             reduce_to: reduce_to,
         };
 
-        let path = format!("{}/orders/{}", PORTFOLIO_PATH, order_id);
-        let result: SingleOrderResponse = self.signed_post(&path, &decrease_payload).await?;
+        // v2 portfolio API: POST /orders/{order_id}/decrease
+        let path = format!("{}/orders/{}/decrease", PORTFOLIO_PATH, order_id);
+
+        // response is now { "order": { … }, "reduced_by": int }
+        let result: DecreaseOrderResponse = self.signed_post(&path, &decrease_payload).await?;
         Ok(result.order)
     }
 
-    // /// Retrieves a list of fills from the Kalshi exchange based on specified criteria.
-    // ///
-    // /// This method fetches multiple fills, allowing for filtering by ticker, order ID, time range,
-    // /// and pagination. A valid authentication token is required to access this information.
-    // /// If the user is not logged in or the token is missing, it returns an error.
-    // ///
-    // /// # Arguments
-    // ///
-    // /// * `ticker` - An optional string to filter fills by market ticker.
-    // /// * `order_id` - An optional string to filter fills by order ID.
-    // /// * `min_ts` - An optional minimum timestamp for fill creation time.
-    // /// * `max_ts` - An optional maximum timestamp for fill creation time.
-    // /// * `limit` - An optional integer to limit the number of fills returned.
-    // /// * `cursor` - An optional string for pagination cursor.
-    // ///
-    // /// # Returns
-    // ///
-    // /// - `Ok((Option<String>, Vec<Fill>))`: A tuple containing an optional pagination cursor
-    // ///   and a vector of `Fill` objects on successful retrieval.
-    // /// - `Err(KalshiError)`: An error if the user is not authenticated or if there is an issue with the request.
-    // ///
-    // /// # Example
-    // /// Retrieves all filled orders
-    // /// ```
-    // /// // Assuming `kalshi_instance` is an already authenticated instance of `Kalshi`
-    // /// let fills = kalshi_instance.get_multiple_fills(
-    // ///     Some("ticker_name"), None, None, None, None, None
-    // /// ).await.unwrap();
-    // /// ```
-    // ///
-    // pub async fn get_multiple_fills(
-    //     &self,
-    //     ticker: Option<String>,
-    //     order_id: Option<String>,
-    //     min_ts: Option<i64>,
-    //     max_ts: Option<i64>,
-    //     limit: Option<i32>,
-    //     cursor: Option<String>,
-    // ) -> Result<(Option<String>, Vec<Fill>), KalshiError> {
-    //     if self.curr_token == None {
-    //         return Err(KalshiError::UserInputError(
-    //             "Not logged in, a valid token is required for requests that require authentication"
-    //                 .to_string(),
-    //         ));
-    //     }
-    //     let user_fills_url: &str = &format!("{}/portfolio/fills", self.base_url.to_string());
+    /// Retrieves a list of fills from the Kalshi exchange based on specified criteria.
+    ///
+    /// This method fetches multiple fills, allowing for filtering by ticker, order ID, time range,
+    /// and pagination. A valid authentication token is required to access this information.
+    /// If the user is not logged in or the token is missing, it returns an error.
+    ///
+    /// # Arguments
+    ///
+    /// * `ticker` - An optional string to filter fills by market ticker.
+    /// * `order_id` - An optional string to filter fills by order ID.
+    /// * `min_ts` - An optional minimum timestamp for fill creation time.
+    /// * `max_ts` - An optional maximum timestamp for fill creation time.
+    /// * `limit` - An optional integer to limit the number of fills returned.
+    /// * `cursor` - An optional string for pagination cursor.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok((Option<String>, Vec<Fill>))`: A tuple containing an optional pagination cursor
+    ///   and a vector of `Fill` objects on successful retrieval.
+    /// - `Err(KalshiError)`: An error if the user is not authenticated or if there is an issue with the request.
+    ///
+    /// # Example
+    /// Retrieves all filled orders
+    /// ```
+    /// // Assuming `kalshi_instance` is an already authenticated instance of `Kalshi`
+    /// let fills = kalshi_instance.get_fills(
+    ///     Some("ticker_name"), None, None, None, None, None
+    /// ).await.unwrap();
+    /// ```
+    ///
+    pub async fn get_fills(
+        &self,
+        ticker: Option<String>,
+        order_id: Option<String>,
+        min_ts: Option<i64>,
+        max_ts: Option<i64>,
+        limit: Option<i32>,
+        cursor: Option<String>,
+    ) -> Result<(Option<String>, Vec<Fill>), KalshiError> {
+        let mut params: Vec<(&str, String)> = Vec::with_capacity(7);
 
-    //     let mut params: Vec<(&str, String)> = Vec::with_capacity(7);
+        add_param!(params, "ticker", ticker);
+        add_param!(params, "limit", limit);
+        add_param!(params, "cursor", cursor);
+        add_param!(params, "min_ts", min_ts);
+        add_param!(params, "max_ts", max_ts);
+        add_param!(params, "order_id", order_id);
 
-    //     add_param!(params, "ticker", ticker);
-    //     add_param!(params, "limit", limit);
-    //     add_param!(params, "cursor", cursor);
-    //     add_param!(params, "min_ts", min_ts);
-    //     add_param!(params, "max_ts", max_ts);
-    //     add_param!(params, "order_id", order_id);
+        let path = if params.is_empty() {
+            format!("{}/fills", PORTFOLIO_PATH)
+        } else {
+            let query_string = params
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("&");
+            format!("{}/fills?{}", PORTFOLIO_PATH, query_string)
+        };
 
-    //     let user_fills_url = reqwest::Url::parse_with_params(user_fills_url, &params)
-    //         .unwrap_or_else(|err| {
-    //             eprintln!("{:?}", err);
-    //             panic!("Internal Parse Error, please contact developer!");
-    //         });
+        let result: MultipleFillsResponse = self.signed_get(&path).await?;
+        return Ok((result.cursor, result.fills));
+    }
 
-    //     let result: MultipleFillsResponse = self
-    //         .client
-    //         .get(user_fills_url)
-    //         .header("Authorization", self.curr_token.clone().unwrap())
-    //         .send()
-    //         .await?
-    //         .json()
-    //         .await?;
+    /// Retrieves a list of portfolio settlements from the Kalshi exchange.
+    ///
+    /// This method fetches settlements in the user's portfolio, with options for pagination using limit and cursor.
+    /// A valid authentication token is required to access this information.
+    /// If the user is not logged in or the token is missing, it returns an error.
+    ///
+    /// # Arguments
+    ///
+    /// * `limit` - An optional integer to limit the number of settlements returned.
+    /// * `cursor` - An optional string for pagination cursor.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok((Option<String>, Vec<Settlement>))`: A tuple containing an optional pagination cursor
+    ///   and a vector of `Settlement` objects on successful retrieval.
+    /// - `Err(KalshiError)`: An error if the user is not authenticated or if there is an issue with the request.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// // Assuming `kalshi_instance` is an already authenticated instance of `Kalshi`
+    /// let settlements = kalshi_instance.get_settlements(None, None).await.unwrap();
+    /// ```
+    pub async fn get_settlements(
+        &self,
+        limit: Option<i64>,
+        cursor: Option<String>,
+    ) -> Result<(Option<String>, Vec<Settlement>), KalshiError> {
+        let mut params: Vec<(&str, String)> = Vec::with_capacity(6);
 
-    //     return Ok((result.cursor, result.fills));
-    // }
+        add_param!(params, "limit", limit);
+        add_param!(params, "cursor", cursor);
 
-    // /// Retrieves a list of portfolio settlements from the Kalshi exchange.
-    // ///
-    // /// This method fetches settlements in the user's portfolio, with options for pagination using limit and cursor.
-    // /// A valid authentication token is required to access this information.
-    // /// If the user is not logged in or the token is missing, it returns an error.
-    // ///
-    // /// # Arguments
-    // ///
-    // /// * `limit` - An optional integer to limit the number of settlements returned.
-    // /// * `cursor` - An optional string for pagination cursor.
-    // ///
-    // /// # Returns
-    // ///
-    // /// - `Ok((Option<String>, Vec<Settlement>))`: A tuple containing an optional pagination cursor
-    // ///   and a vector of `Settlement` objects on successful retrieval.
-    // /// - `Err(KalshiError)`: An error if the user is not authenticated or if there is an issue with the request.
-    // ///
-    // /// # Example
-    // ///
-    // /// ```
-    // /// // Assuming `kalshi_instance` is an already authenticated instance of `Kalshi`
-    // /// let settlements = kalshi_instance.get_portfolio_settlements(None, None).await.unwrap();
-    // /// ```
-    // pub async fn get_portfolio_settlements(
-    //     &self,
-    //     limit: Option<i64>,
-    //     cursor: Option<String>,
-    // ) -> Result<(Option<String>, Vec<Settlement>), KalshiError> {
-    //     if self.curr_token == None {
-    //         return Err(KalshiError::UserInputError(
-    //             "Not logged in, a valid token is required for requests that require authentication"
-    //                 .to_string(),
-    //         ));
-    //     }
-    //     let settlements_url: &str = &format!("{}/portfolio/settlements", self.base_url.to_string());
+        let path = if params.is_empty() {
+            format!("{}/settlements", PORTFOLIO_PATH)
+        } else {
+            let query_string = params
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("&");
+            format!("{}/settlements?{}", PORTFOLIO_PATH, query_string)
+        };
 
-    //     let mut params: Vec<(&str, String)> = Vec::with_capacity(6);
+        let result: PortfolioSettlementResponse = self.signed_get(&path).await?;
+        Ok((result.cursor, result.settlements))
+    }
 
-    //     add_param!(params, "limit", limit);
-    //     add_param!(params, "cursor", cursor);
+    /// Retrieves the user's positions in events and markets from the Kalshi exchange.
+    ///
+    /// This method fetches the user's positions, providing options for filtering by settlement status,
+    /// specific ticker, and event ticker, as well as pagination using limit and cursor. A valid
+    /// authentication token is required to access this information. If the user is not logged in
+    /// or the token is missing, it returns an error.
+    ///
+    /// # Arguments
+    ///
+    /// * `limit` - An optional integer to limit the number of positions returned.
+    /// * `cursor` - An optional string for pagination cursor.
+    /// * `settlement_status` - An optional string to filter positions by their settlement status.
+    /// * `ticker` - An optional string to filter positions by market ticker.
+    /// * `event_ticker` - An optional string to filter positions by event ticker.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok((Option<String>, Vec<EventPosition>, Vec<MarketPosition>))`: A tuple containing an optional pagination cursor,
+    ///   a vector of `EventPosition` objects, and a vector of `MarketPosition` objects on successful retrieval.
+    /// - `Err(KalshiError)`: An error if the user is not authenticated or if there is an issue with the request.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// // Assuming `kalshi_instance` is an already authenticated instance of `Kalshi`
+    /// let positions = kalshi_instance.get_positions(None, None, None, None, None).await.unwrap();
+    /// ```
+    ///
+    pub async fn get_positions(
+        &self,
+        limit: Option<i64>,
+        cursor: Option<String>,
+        settlement_status: Option<String>,
+        ticker: Option<String>,
+        event_ticker: Option<String>,
+    ) -> Result<(Option<String>, Vec<EventPosition>, Vec<MarketPosition>), KalshiError> {
+        let mut params: Vec<(&str, String)> = Vec::with_capacity(6);
 
-    //     let settlements_url = reqwest::Url::parse_with_params(settlements_url, &params)
-    //         .unwrap_or_else(|err| {
-    //             eprintln!("{:?}", err);
-    //             panic!("Internal Parse Error, please contact developer!");
-    //         });
+        add_param!(params, "limit", limit);
+        add_param!(params, "cursor", cursor);
+        add_param!(params, "settlement_status", settlement_status);
+        add_param!(params, "ticker", ticker);
+        add_param!(params, "event_ticker", event_ticker);
 
-    //     let result: PortfolioSettlementResponse = self
-    //         .client
-    //         .get(settlements_url)
-    //         .header("Authorization", self.curr_token.clone().unwrap())
-    //         .send()
-    //         .await?
-    //         .json()
-    //         .await?;
+        let path = if params.is_empty() {
+            format!("{}/positions", PORTFOLIO_PATH)
+        } else {
+            let query_string = params
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("&");
+            format!("{}/positions?{}", PORTFOLIO_PATH, query_string)
+        };
 
-    //     Ok((result.cursor, result.settlements))
-    // }
+        let result: GetPositionsResponse = self.signed_get(&path).await?;
 
-    // /// Retrieves the user's positions in events and markets from the Kalshi exchange.
-    // ///
-    // /// This method fetches the user's positions, providing options for filtering by settlement status,
-    // /// specific ticker, and event ticker, as well as pagination using limit and cursor. A valid
-    // /// authentication token is required to access this information. If the user is not logged in
-    // /// or the token is missing, it returns an error.
-    // ///
-    // /// # Arguments
-    // ///
-    // /// * `limit` - An optional integer to limit the number of positions returned.
-    // /// * `cursor` - An optional string for pagination cursor.
-    // /// * `settlement_status` - An optional string to filter positions by their settlement status.
-    // /// * `ticker` - An optional string to filter positions by market ticker.
-    // /// * `event_ticker` - An optional string to filter positions by event ticker.
-    // ///
-    // /// # Returns
-    // ///
-    // /// - `Ok((Option<String>, Vec<EventPosition>, Vec<MarketPosition>))`: A tuple containing an optional pagination cursor,
-    // ///   a vector of `EventPosition` objects, and a vector of `MarketPosition` objects on successful retrieval.
-    // /// - `Err(KalshiError)`: An error if the user is not authenticated or if there is an issue with the request.
-    // ///
-    // /// # Example
-    // ///
-    // /// ```
-    // /// // Assuming `kalshi_instance` is an already authenticated instance of `Kalshi`
-    // /// let user_positions = kalshi_instance.get_user_positions(None, None, None, None, None).await.unwrap();
-    // /// ```
-    // ///
-    // pub async fn get_user_positions(
-    //     &self,
-    //     limit: Option<i64>,
-    //     cursor: Option<String>,
-    //     settlement_status: Option<String>,
-    //     ticker: Option<String>,
-    //     event_ticker: Option<String>,
-    // ) -> Result<(Option<String>, Vec<EventPosition>, Vec<MarketPosition>), KalshiError> {
-    //     if self.curr_token == None {
-    //         return Err(KalshiError::UserInputError(
-    //             "Not logged in, a valid token is required for requests that require authentication"
-    //                 .to_string(),
-    //         ));
-    //     }
-    //     let positions_url: &str = &format!("{}/portfolio/positions", self.base_url.to_string());
+        Ok((
+            result.cursor,
+            result.event_positions,
+            result.market_positions,
+        ))
+    }
 
-    //     let mut params: Vec<(&str, String)> = Vec::with_capacity(6);
-
-    //     add_param!(params, "limit", limit);
-    //     add_param!(params, "cursor", cursor);
-    //     add_param!(params, "settlement_status", settlement_status);
-    //     add_param!(params, "ticker", ticker);
-    //     add_param!(params, "event_ticker", event_ticker);
-
-    //     let positions_url =
-    //         reqwest::Url::parse_with_params(positions_url, &params).unwrap_or_else(|err| {
-    //             eprintln!("{:?}", err);
-    //             panic!("Internal Parse Error, please contact developer!");
-    //         });
-
-    //     let result: GetPositionsResponse = self
-    //         .client
-    //         .get(positions_url)
-    //         .header("Authorization", self.curr_token.clone().unwrap())
-    //         .send()
-    //         .await?
-    //         .json()
-    //         .await?;
-
-    //     Ok((
-    //         result.cursor,
-    //         result.event_positions,
-    //         result.market_positions,
-    //     ))
-    // }
-
-    // /// Submits an order to the Kalshi exchange.
-    // ///
-    // /// This method allows placing an order in the market, requiring details such as action, count, side,
-    // /// ticker, order type, and other optional parameters. A valid authentication token is
-    // /// required for this operation. Note that for limit orders, either `no_price` or `yes_price` must be provided,
-    // /// but not both.
-    // ///
-    // /// # Arguments
-    // ///
-    // /// * `action` - The action (buy/sell) of the order.
-    // /// * `client_order_id` - An optional client-side identifier for the order.
-    // /// * `count` - The number of shares or contracts to trade.
-    // /// * `side` - The side (Yes/No) of the order.
-    // /// * `ticker` - The market ticker the order is placed in.
-    // /// * `input_type` - The type of the order (e.g., market, limit).
-    // /// * `buy_max_cost` - The maximum cost for a buy order. Optional.
-    // /// * `expiration_ts` - The expiration timestamp for the order. Optional.
-    // /// * `no_price` - The price for the 'No' option in a limit order. Optional.
-    // /// * `sell_position_floor` - The minimum position size to maintain after selling. Optional.
-    // /// * `yes_price` - The price for the 'Yes' option in a limit order. Optional.
-    // ///
-    // /// # Returns
-    // ///
-    // /// - `Ok(Order)`: The created `Order` object on successful placement.
-    // /// - `Err(KalshiError)`: An error if the user is not authenticated, if both `no_price` and `yes_price` are provided for limit orders,
-    // ///   or if there is an issue with the request.
-    // ///
-    // /// # Example
-    // ///
-    // /// ```
-    // /// // Assuming `kalshi_instance` is an already authenticated instance of `Kalshi`
-    // /// let action = Action::Buy;
-    // /// let side = Side::Yes;
-    // /// let order = kalshi_instance.create_order(
-    // ///     action,
-    // ///     None,
-    // ///     10,
-    // ///     side,
-    // ///     "example_ticker",
-    // ///     OrderType::Limit,
-    // ///     None,
-    // ///     None,
-    // ///     None,
-    // ///     None,
-    // ///     Some(100)
-    // /// ).await.unwrap();
-    // /// ```
-    // ///
+    /// Submits an order to the Kalshi exchange.
+    ///
+    /// This method allows placing an order in the market, requiring details such as action, count, side,
+    /// ticker, order type, and other optional parameters. A valid authentication token is
+    /// required for this operation. Note that for limit orders, either `no_price` or `yes_price` must be provided,
+    /// but not both.
+    ///
+    /// # Arguments
+    ///
+    /// * `action` - The action (buy/sell) of the order.
+    /// * `client_order_id` - An optional client-side identifier for the order.
+    /// * `count` - The number of shares or contracts to trade.
+    /// * `side` - The side (Yes/No) of the order.
+    /// * `ticker` - The market ticker the order is placed in.
+    /// * `input_type` - The type of the order (e.g., market, limit).
+    /// * `buy_max_cost` - The maximum cost for a buy order. Optional.
+    /// * `expiration_ts` - The expiration timestamp for the order. Optional.
+    /// * `no_price` - The price for the 'No' option in a limit order. Optional.
+    /// * `sell_position_floor` - The minimum position size to maintain after selling. Optional.
+    /// * `yes_price` - The price for the 'Yes' option in a limit order. Optional.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Order)`: The created `Order` object on successful placement.
+    /// - `Err(KalshiError)`: An error if the user is not authenticated, if both `no_price` and `yes_price` are provided for limit orders,
+    ///   or if there is an issue with the request.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// // Assuming `kalshi_instance` is an already authenticated instance of `Kalshi`
+    /// let action = Action::Buy;
+    /// let side = Side::Yes;
+    /// let order = kalshi_instance.create_order(
+    ///     action,
+    ///     None,
+    ///     10,
+    ///     side,
+    ///     "example_ticker",
+    ///     OrderType::Limit,
+    ///     None,
+    ///     None,
+    ///     None,
+    ///     None,
+    ///     Some(100)
+    /// ).await.unwrap();
+    /// ```
+    ///
     
-    // // todo: rewrite using generics
-    // pub async fn create_order(
-    //     &self,
-    //     action: Action,
-    //     client_order_id: Option<String>,
-    //     count: i32,
-    //     side: Side,
-    //     ticker: String,
-    //     input_type: OrderType,
-    //     buy_max_cost: Option<i64>,
-    //     expiration_ts: Option<i64>,
-    //     no_price: Option<i64>,
-    //     sell_position_floor: Option<i32>,
-    //     yes_price: Option<i64>,
-    // ) -> Result<Order, KalshiError> {
-    //     if self.curr_token == None {
-    //         return Err(KalshiError::UserInputError(
-    //             "Not logged in, a valid token is required for requests that require authentication"
-    //                 .to_string(),
-    //         ));
-    //     }
-    //     let order_url: &str = &format!("{}/portfolio/orders", self.base_url.to_string());
+    // todo: rewrite using generics
+    pub async fn create_order(
+        &self,
+        action: Action,
+        client_order_id: Option<String>,
+        count: i32,
+        side: Side,
+        ticker: String,
+        input_type: OrderType,
+        buy_max_cost: Option<i64>,
+        expiration_ts: Option<i64>,
+        no_price: Option<i64>,
+        sell_position_floor: Option<i32>,
+        yes_price: Option<i64>,
+    ) -> Result<Order, KalshiError> {
+        match input_type {
+            OrderType::Limit => match (no_price, yes_price) {
+                (Some(_), Some(_)) => {
+                    return Err(KalshiError::UserInputError(
+                        "Can only provide no_price exclusive or yes_price, can't provide both"
+                            .to_string(),
+                    ));
+                }
+                (None, None) => {
+                    return Err(KalshiError::UserInputError(
+                            "Must provide either no_price exclusive or yes_price, can't provide neither"
+                                .to_string(),
+                        ));
+                }
+                _ => {}
+            },
+            _ => {}
+        }
 
-    //     match input_type {
-    //         OrderType::Limit => match (no_price, yes_price) {
-    //             (Some(_), Some(_)) => {
-    //                 return Err(KalshiError::UserInputError(
-    //                     "Can only provide no_price exclusive or yes_price, can't provide both"
-    //                         .to_string(),
-    //                 ));
-    //             }
-    //             (None, None) => {
-    //                 return Err(KalshiError::UserInputError(
-    //                         "Must provide either no_price exclusive or yes_price, can't provide neither"
-    //                             .to_string(),
-    //                     ));
-    //             }
-    //             _ => {}
-    //         },
-    //         _ => {}
-    //     }
+        let unwrapped_id = match client_order_id {
+            Some(id) => id,
+            _ => String::from(Uuid::new_v4()),
+        };
 
-    //     let unwrapped_id = match client_order_id {
-    //         Some(id) => id,
-    //         _ => String::from(Uuid::new_v4()),
-    //     };
+        let order_payload = CreateOrderPayload {
+            action: action,
+            client_order_id: unwrapped_id,
+            count: count,
+            side: side,
+            ticker: ticker,
+            r#type: input_type,
+            buy_max_cost: buy_max_cost,
+            expiration_ts: expiration_ts,
+            no_price: no_price,
+            sell_position_floor: sell_position_floor,
+            yes_price: yes_price,
+        };
 
-    //     let order_payload = CreateOrderPayload {
-    //         action: action,
-    //         client_order_id: unwrapped_id,
-    //         count: count,
-    //         side: side,
-    //         ticker: ticker,
-    //         r#type: input_type,
-    //         buy_max_cost: buy_max_cost,
-    //         expiration_ts: expiration_ts,
-    //         no_price: no_price,
-    //         sell_position_floor: sell_position_floor,
-    //         yes_price: yes_price,
-    //     };
+        let path = format!("{}/orders", PORTFOLIO_PATH);
+        let result: SingleOrderResponse = self.signed_post(&path, &order_payload).await?;
+        Ok(result.order)
+    }
 
-    //     let response = self
-    //         .client
-    //         .post(order_url)
-    //         .header("Authorization", self.curr_token.clone().unwrap())
-    //         .header("content-type", "application/json".to_string())
-    //         .json(&order_payload)
-    //         .send()
-    //         .await;
+    pub async fn batch_cancel_order(
+        &mut self,
+        batch: Vec<String>,
+    ) -> Result<Vec<Result<(Order, i32), KalshiError>>, KalshiError> {
+        let temp_instance = Arc::new(self.clone());
+        let mut futures = Vec::new();
 
-    //     match response {
-    //         Ok(resp) => {
-    //             if resp.status().is_success() {
-    //                 match resp.json::<SingleOrderResponse>().await {
-    //                     Ok(order_response) => Ok(order_response.order),
-    //                     Err(json_err) => {
-    //                         // Handle JSON decoding error
-    //                         let error_message =
-    //                             format!("Failed to decode JSON response: {}", json_err);
-    //                         eprintln!("{}", error_message);
-    //                         Err(KalshiError::InternalError(error_message))
-    //                     }
-    //                 }
-    //             } else {
-    //                 // Handle non-success HTTP status codes
-    //                 let error_message = format!("HTTP Error: {}", resp.status());
-    //                 eprintln!("{}", error_message);
-    //                 Err(KalshiError::InternalError(error_message))
-    //             }
-    //         }
-    //         Err(request_err) => {
-    //             // Handle errors in sending the request
-    //             let error_message = format!("Failed to send request: {}", request_err);
-    //             eprintln!("{}", error_message);
-    //             Err(KalshiError::InternalError(error_message))
-    //         }
-    //     }
-    // }
+        for order_id in batch {
+            let kalshi_ref = Arc::clone(&temp_instance);
+            let order_id = order_id.clone();
 
-    // pub async fn batch_cancel_order(
-    //     &mut self,
-    //     batch: Vec<String>,
-    // ) -> Result<Vec<Result<(Order, i32), KalshiError>>, KalshiError> {
-    //     let temp_instance = Arc::new(self.clone());
-    //     let mut futures = Vec::new();
+            let future = task::spawn(async move { kalshi_ref.cancel_order(&order_id).await });
+            futures.push(future);
+        }
 
-    //     for order_id in batch {
-    //         let kalshi_ref = Arc::clone(&temp_instance);
-    //         let order_id = order_id.clone();
+        let mut outputs = Vec::new();
 
-    //         let future = task::spawn(async move { kalshi_ref.cancel_order(&order_id).await });
-    //         futures.push(future);
-    //     }
+        // TODO: improve error process for joining, I don't believe it's specific enough.
+        for future in futures {
+            match future.await {
+                Ok(result) => outputs.push(result),
+                Err(e) => {
+                    return Err(KalshiError::UserInputError(format!(
+                        "Join of concurrent requests failed, check input or message developer: {}",
+                        e
+                    )));
+                }
+            }
+        }
+        Ok(outputs)
+    }
 
-    //     let mut outputs = Vec::new();
-
-    //     // TODO: improve error process for joining, I don't believe it's specific enough.
-    //     for future in futures {
-    //         match future.await {
-    //             Ok(result) => outputs.push(result),
-    //             Err(e) => {
-    //                 return Err(KalshiError::UserInputError(format!(
-    //                     "Join of concurrent requests failed, check input or message developer: {}",
-    //                     e
-    //                 )));
-    //             }
-    //         }
-    //     }
-    //     Ok(outputs)
-    // }
-
-    // pub async fn batch_create_order(
-    //     &mut self,
-    //     batch: Vec<OrderCreationField>,
-    // ) -> Result<Vec<Result<(Order, i32), KalshiError>>, KalshiError> {
-    //     todo!()
-    // }
+    pub async fn batch_create_order(
+        &mut self,
+        _batch: Vec<OrderCreationField>,
+    ) -> Result<Vec<Result<(Order, i32), KalshiError>>, KalshiError> {
+        todo!()
+    }
 }
 
 // PRIVATE STRUCTS

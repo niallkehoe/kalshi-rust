@@ -472,12 +472,15 @@ version = "0.9.0"
 dependencies = [
  "base64",
  "chrono",
+ "dotenv",
  "http",
  "openssl",
  "reqwest",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "tokio",
+ "url",
  "uuid",
 ]
 
