@@ -45,6 +45,14 @@ impl Kalshi {
         self.signed_request::<(), T>("DELETE", path, None).await
     }
 
+    pub(crate) async fn signed_delete_with_body<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, KalshiError> {
+        self.signed_request("DELETE", path, Some(body)).await
+    }
+
     pub(crate) async fn signed_put<B: serde::Serialize, T: serde::de::DeserializeOwned>(
         &self,
         path: &str,

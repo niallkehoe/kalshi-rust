@@ -120,6 +120,108 @@ impl Kalshi {
         let url = format!("{}/exchange/user_data_timestamp", self.base_url);
         Ok(self.client.get(&url).send().await?.json().await?)
     }
+
+    /// Checks if the exchange is active with exponential backoff retry logic.
+    ///
+    /// This method attempts to verify that the exchange is operational and trading is active.
+    /// If the exchange is not active, it will retry with exponential backoff delays.
+    /// After all attempts are exhausted, the program will exit with a non-zero status code.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_attempts` - Maximum number of attempts to check exchange status (default: 5)
+    /// * `base_delay_secs` - Base delay in seconds for exponential backoff (default: 30.0)
+    /// * `max_delay_secs` - Maximum delay in seconds to cap exponential growth (default: 300.0)
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(())`: If the exchange becomes active within the retry attempts
+    /// - `Err(KalshiError)`: If there's an unrecoverable error during the process
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// // Assuming `kalshi_instance` is an instance of `Kalshi`
+    /// // This will exit the program if exchange doesn't become active after retries
+    /// kalshi_instance.check_exchange_active_with_backoff().await.unwrap();
+    /// 
+    /// // Custom configuration
+    /// kalshi_instance.check_exchange_active_with_backoff(3, 60.0, 600.0).await.unwrap();
+    /// ```
+    ///
+    pub async fn check_exchange_active_with_backoff(
+        &self,
+        max_attempts: u32,
+        base_delay_secs: f64,
+        max_delay_secs: f64
+    ) -> Result<(), KalshiError> {
+        use std::process;
+        use tokio::time::{sleep, Duration};
+        
+        for attempt in 1..=max_attempts {
+            match self.get_exchange_status().await {
+                Ok(status) => {
+                    if status.trading_active && status.exchange_active {
+                        println!("Exchange is active (attempt {}/{}", attempt, max_attempts);
+                        return Ok(());
+                    }
+                    
+                    if attempt < max_attempts {
+                        let delay_secs = (base_delay_secs * (2.0_f64.powi((attempt - 1) as i32)))
+                            .min(max_delay_secs);
+                        println!(
+                            "Exchange not active (attempt {}/{}). Waiting {:.1} seconds before retry...",
+                            attempt, max_attempts, delay_secs
+                        );
+                        sleep(Duration::from_secs_f64(delay_secs)).await;
+                    } else {
+                        println!("Exchange not active after {} attempts", max_attempts);
+                    }
+                }
+                Err(e) => {
+                    if attempt < max_attempts {
+                        let delay_secs = (base_delay_secs * (2.0_f64.powi((attempt - 1) as i32)))
+                            .min(max_delay_secs);
+                        println!(
+                            "Error checking exchange status (attempt {}/{}): {}. Waiting {:.1} seconds before retry...",
+                            attempt, max_attempts, e, delay_secs
+                        );
+                        sleep(Duration::from_secs_f64(delay_secs)).await;
+                    } else {
+                        println!("Failed to check exchange status after {} attempts: {}", max_attempts, e);
+                    }
+                }
+            }
+        }
+        
+        println!("Exiting as exchange is not active after all retry attempts");
+        process::exit(1);
+    }
+
+    /// Convenience method to check exchange status with default backoff settings.
+    ///
+    /// This method calls `check_exchange_active_with_backoff` with default parameters:
+    /// - max_attempts: 5
+    /// - base_delay_secs: 30.0
+    /// - max_delay_secs: 300.0
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(())`: If the exchange becomes active within the retry attempts
+    /// - `Err(KalshiError)`: If there's an unrecoverable error during the process
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// // Assuming `kalshi_instance` is an instance of `Kalshi`
+    /// kalshi_instance.check_exchange_active().await.unwrap();
+    /// ```
+    ///
+    pub async fn check_exchange_active(&self) -> Result<(), KalshiError> {
+        self.check_exchange_active_with_backoff(5, 30.0, 300.0).await
+    }
+
+    
 }
 
 // -------- public models --------

@@ -173,6 +173,7 @@ impl<'a> Kalshi {
     /// # Arguments
     ///
     /// * `ticker` - A string slice referencing the market's unique ticker identifier.
+    /// * `depth` - Optional depth parameter to limit the number of price levels returned.
     ///
     /// # Returns
     ///
@@ -184,13 +185,43 @@ impl<'a> Kalshi {
     /// ```
     /// // Assuming `kalshi_instance` is an instance of `Kalshi`
     /// let ticker = "SOME-MARKET-2024";
-    /// let orderbook = kalshi_instance.get_market_orderbook(ticker).await.unwrap();
+    /// let orderbook = kalshi_instance.get_orderbook(ticker, Some(10)).await.unwrap();
     /// ```
     ///
-    pub async fn get_market_orderbook(&self, ticker: &str) -> Result<Orderbook, KalshiError> {
-        let url = format!("{}/markets/{}/orderbook", self.base_url, ticker);
+    pub async fn get_orderbook(&self, ticker: &str, depth: Option<i32>) -> Result<Orderbook, KalshiError> {
+        let mut url = format!("{}/markets/{}/orderbook", self.base_url, ticker);
+        
+        if let Some(d) = depth {
+            url.push_str(&format!("?depth={}", d));
+        }
+        
         let res: OrderbookResponse = self.client.get(url).send().await?.json().await?;
         Ok(res.orderbook)
+    }
+
+    /// Retrieves the orderbook for a specific market from the Kalshi exchange (without depth limit).
+    ///
+    /// This is a convenience method that calls `get_orderbook(ticker, None)`.
+    ///
+    /// # Arguments
+    ///
+    /// * `ticker` - A string slice referencing the market's unique ticker identifier.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Orderbook)`: The current orderbook data for the specified market on successful retrieval.
+    /// - `Err(KalshiError)`: An error if there is an issue with the request.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// // Assuming `kalshi_instance` is an instance of `Kalshi`
+    /// let ticker = "SOME-MARKET-2024";
+    /// let orderbook = kalshi_instance.get_orderbook_full(ticker).await.unwrap();
+    /// ```
+    ///
+    pub async fn get_orderbook_full(&self, ticker: &str) -> Result<Orderbook, KalshiError> {
+        self.get_orderbook(ticker, None).await
     }
 
     /// Retrieves candlestick data for a specific market from the Kalshi exchange.
@@ -200,49 +231,45 @@ impl<'a> Kalshi {
     ///
     /// # Arguments
     ///
+    /// * `ticker` - A string slice referencing the market's unique ticker identifier.
     /// * `series_ticker` - A string slice referencing the series ticker.
-    /// * `market_ticker` - A string slice referencing the market's unique ticker identifier.
-    /// * `period_interval` - An optional string specifying the time interval for candlesticks.
-    /// * `start_ts` - An optional timestamp for the start of the data range.
-    /// * `end_ts` - An optional timestamp for the end of the data range.
-    /// * `limit` - An optional integer to limit the number of candlesticks returned.
-    /// * `cursor` - An optional string for pagination cursor.
+    /// * `start_ts` - Optional timestamp for the start of the data range (restricts candlesticks to those ending on or after this timestamp).
+    /// * `end_ts` - Optional timestamp for the end of the data range (restricts candlesticks to those ending on or before this timestamp).
+    /// * `period_interval` - Optional integer specifying the length of each candlestick period in minutes (must be 1, 60, or 1440).
     ///
     /// # Returns
     ///
-    /// - `Ok((Option<String>, Vec<Candle>))`: A tuple containing an optional pagination cursor
-    ///   and a vector of `Candle` objects on successful retrieval.
+    /// - `Ok(Vec<Candle>)`: A vector of `Candle` objects on successful retrieval.
     /// - `Err(KalshiError)`: An error if there is an issue with the request.
     ///
     /// # Example
     ///
     /// ```
     /// // Assuming `kalshi_instance` is an instance of `Kalshi`
-    /// let (cursor, candlesticks) = kalshi_instance.get_market_candlesticks(
-    ///     "SOME-SERIES", "SOME-MARKET-2024", Some("1h".to_string()),
-    ///     Some(1640995200), Some(1641081600), Some(100), None
+    /// let candlesticks = kalshi_instance.get_market_candlesticks(
+    ///     "SOME-MARKET-2024", "SOME-SERIES", 1640995200, 1641081600, 60
     /// ).await.unwrap();
     /// ```
     ///
     pub async fn get_market_candlesticks(
         &self,
-        series_ticker: &str, market_ticker: &str,
-        period_interval: Option<String>, start_ts: Option<i64>, end_ts: Option<i64>,
-        limit: Option<i64>, cursor: Option<String>,
-    ) -> Result<(Option<String>, Vec<Candle>), KalshiError> {
+        ticker: &str,
+        series_ticker: &str,
+        start_ts: Option<i64>,
+        end_ts: Option<i64>,
+        period_interval: Option<i32>,
+    ) -> Result<Vec<Candle>, KalshiError> {
         let url = format!("{}/series/{}/markets/{}/candlesticks",
-                          self.base_url, series_ticker, market_ticker);
+                          self.base_url, series_ticker, ticker);
         let mut p = vec![];
-        add_param!(p, "period_interval", period_interval);
         add_param!(p, "start_ts", start_ts);
         add_param!(p, "end_ts", end_ts);
-        add_param!(p, "limit", limit);
-        add_param!(p, "cursor", cursor);
+        add_param!(p, "period_interval", period_interval);
 
         let res: CandlestickListResponse = self.client
             .get(reqwest::Url::parse_with_params(&url, &p)?)
             .send().await?.json().await?;
-        Ok((res.cursor, res.candlesticks))
+        Ok(res.candlesticks)
     }
 
     /// Retrieves a list of trades from the Kalshi exchange based on specified criteria.
@@ -536,7 +563,7 @@ pub struct Candle {
 ///
 /// The orderbook contains current bid and ask orders for both Yes and No sides
 /// of a market, showing the current market depth and liquidity.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Orderbook {
     pub yes: Option<Vec<Vec<i32>>>,
     pub no: Option<Vec<Vec<i32>>>,

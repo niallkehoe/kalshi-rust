@@ -51,7 +51,7 @@ async fn main() {
 
     let nytemp_market_data = kalshi_instance.get_single_market(&new_york_ticker).await.unwrap();
     
-    let nytemp_market_orderbook = kalshi_instance.get_market_orderbook(&new_york_ticker, Some(1)).await.unwrap();
+    let nytemp_market_orderbook = kalshi_instance.get_orderbook(&new_york_ticker, Some(10)).await.unwrap();
 
 
       let bought_order = kalshi_instance

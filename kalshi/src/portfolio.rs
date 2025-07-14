@@ -445,7 +445,7 @@ impl<'a> Kalshi {
     /// ```
     ///
     
-    // todo: rewrite using generics
+    // TODO: rewrite using generics
     pub async fn create_order(
         &self,
         action: Action,
@@ -503,43 +503,113 @@ impl<'a> Kalshi {
         Ok(result.order)
     }
 
-    pub async fn batch_cancel_order(
-        &mut self,
-        batch: Vec<String>,
-    ) -> Result<Vec<Result<(Order, i32), KalshiError>>, KalshiError> {
-        let temp_instance = Arc::new(self.clone());
-        let mut futures = Vec::new();
-
-        for order_id in batch {
-            let kalshi_ref = Arc::clone(&temp_instance);
-            let order_id = order_id.clone();
-
-            let future = task::spawn(async move { kalshi_ref.cancel_order(&order_id).await });
-            futures.push(future);
+    // -----------------------------------------------------------------
+    // BATCH-CREATE  (POST  /portfolio/orders/batched)
+    // -----------------------------------------------------------------
+    pub async fn batch_create_order(
+        &self,
+        batch: Vec<OrderCreationField>,
+    ) -> Result<Vec<Result<Order, KalshiError>>, KalshiError> {
+        if batch.is_empty() {
+            return Ok(Vec::new());
+        }
+        if batch.len() > 20 {
+            return Err(KalshiError::UserInputError(
+                "Batch size exceeds 20; split the request".into(),
+            ));
         }
 
-        let mut outputs = Vec::new();
+        // Convert the user-supplied OrderCreationField into raw payloads -----------------
+        let orders: Vec<CreateOrderPayload> = batch
+            .into_iter()
+            .map(|field| {
+                // unpack the helper struct
+                let (
+                    action,
+                    client_order_id,
+                    count,
+                    side,
+                    ticker,
+                    input_type,
+                    buy_max_cost,
+                    expiration_ts,
+                    no_price,
+                    sell_position_floor,
+                    yes_price,
+                ) = field.get_params();
 
-        // TODO: improve error process for joining, I don't believe it's specific enough.
-        for future in futures {
-            match future.await {
-                Ok(result) => outputs.push(result),
-                Err(e) => {
-                    return Err(KalshiError::UserInputError(format!(
-                        "Join of concurrent requests failed, check input or message developer: {}",
-                        e
-                    )));
+                CreateOrderPayload {
+                    action,
+                    client_order_id: client_order_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+                    count,
+                    side,
+                    ticker,
+                    r#type: input_type,
+                    buy_max_cost,
+                    expiration_ts,
+                    no_price,
+                    sell_position_floor,
+                    yes_price,
                 }
+            })
+            .collect();
+
+        let path = format!("{}/orders/batched", PORTFOLIO_PATH);
+        let body = BatchCreateOrderPayload { orders };
+
+        // NB: signed_post already injects auth headers & error mapping
+        let response: BatchCreateOrdersResponse = self.signed_post(&path, &body).await?;
+
+        // Convert the wire format into Vec<Result<…>>
+        let mut out = Vec::with_capacity(response.orders.len());
+        for item in response.orders {
+            match (item.order, item.error) {
+                (Some(order), None) => out.push(Ok(order)),
+                (_, Some(err)) => out.push(Err(KalshiError::UserInputError(
+                    err.message.unwrap_or_else(|| "unknown error".into()),
+                ))),
+                _ => out.push(Err(KalshiError::InternalError(
+                    "malformed batch-create response".into(),
+                ))),
             }
         }
-        Ok(outputs)
+        Ok(out)
     }
 
-    pub async fn batch_create_order(
-        &mut self,
-        _batch: Vec<OrderCreationField>,
+    // -----------------------------------------------------------------
+    // BATCH-CANCEL (DELETE /portfolio/orders/batched)
+    // -----------------------------------------------------------------
+    pub async fn batch_cancel_order(
+        &self,
+        ids: Vec<String>,
     ) -> Result<Vec<Result<(Order, i32), KalshiError>>, KalshiError> {
-        todo!()
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if ids.len() > 20 {
+            return Err(KalshiError::UserInputError(
+                "Batch size exceeds 20; split the request".into(),
+            ));
+        }
+
+        let path = format!("{}/orders/batched", PORTFOLIO_PATH);
+        let body = BatchCancelOrderPayload { ids };
+
+        let response: BatchCancelOrdersResponse = self.signed_delete_with_body(&path, &body).await?;
+
+        let mut out = Vec::with_capacity(response.orders.len());
+        for item in response.orders {
+            match (item.order, item.reduced_by, item.error) {
+                (Some(order), Some(reduced_by), None) => out.push(Ok((order, reduced_by))),
+                (_, _, Some(err)) => out.push(Err(KalshiError::UserInputError(
+                    err.message.unwrap_or_else(|| "unknown error".into()),
+                ))),
+                _ => out.push(Err(KalshiError::InternalError(
+                    "malformed batch-cancel response".into(),
+                ))),
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -970,6 +1040,48 @@ impl OrderParams
             self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7, self.8, self.9, self.10,
         )
     }
+}
+
+/// Payload for POST /portfolio/orders/batched
+#[derive(Debug, Serialize, Deserialize)]
+struct BatchCreateOrderPayload {
+    orders: Vec<CreateOrderPayload>,
+}
+
+/// Payload for DELETE /portfolio/orders/batched
+#[derive(Debug, Serialize, Deserialize)]
+struct BatchCancelOrderPayload {
+    ids: Vec<String>,
+}
+
+/// One element in the `orders` array that the batch-create endpoint returns.
+#[derive(Debug, Serialize, Deserialize)]
+struct ApiError {
+    message: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BatchCreateOrderResponseItem {
+    order: Option<Order>,
+    error: Option<ApiError>,
+}
+
+/// One element in the `orders` array that the batch-cancel endpoint returns.
+#[derive(Debug, Serialize, Deserialize)]
+struct BatchCancelOrderResponseItem {
+    order: Option<Order>,
+    reduced_by: Option<i32>,
+    error: Option<ApiError>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BatchCreateOrdersResponse {
+    orders: Vec<BatchCreateOrderResponseItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BatchCancelOrdersResponse {
+    orders: Vec<BatchCancelOrderResponseItem>,
 }
 
 #[cfg(test)]
