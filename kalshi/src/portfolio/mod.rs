@@ -358,11 +358,27 @@ impl<'a> Kalshi {
     /// let positions = kalshi_instance.get_positions(None, None, None, None, None).await.unwrap();
     /// ```
     ///
+    /// Retrieves the user's positions in events and markets from the Kalshi exchange using query parameters.
+    ///
+    /// # Query Parameters
+    /// - `cursor`: Option<String>
+    ///     - The Cursor represents a pointer to the next page of records in the pagination.
+    ///       Use the value returned from the previous response to get the next page.
+    /// - `limit`: Option<i32>
+    ///     - Parameter to specify the number of results per page. Defaults to 100.
+    ///       Required range: 1 <= x <= 1000.
+    /// - `count_filter`: Option<String>
+    ///     - Restricts the positions to those with any of following fields with non-zero values,
+    ///       as a comma separated list. The following values are accepted: `position`, `total_traded`.
+    /// - `ticker`: Option<String>
+    ///     - Filter by market ticker.
+    /// - `event_ticker`: Option<String>
+    ///     - Event ticker of desired positions. Multiple event tickers can be provided as a comma-separated list (maximum 10).
     pub async fn get_positions(
         &self,
-        limit: Option<i64>,
+        limit: Option<i32>,
         cursor: Option<String>,
-        settlement_status: Option<String>,
+        count_filter: Option<String>,
         ticker: Option<String>,
         event_ticker: Option<String>,
     ) -> Result<(Option<String>, Vec<EventPosition>, Vec<MarketPosition>), KalshiError> {
@@ -370,7 +386,7 @@ impl<'a> Kalshi {
 
         add_param!(params, "limit", limit);
         add_param!(params, "cursor", cursor);
-        add_param!(params, "settlement_status", settlement_status);
+        add_param!(params, "count_filter", count_filter);
         add_param!(params, "ticker", ticker);
         add_param!(params, "event_ticker", event_ticker);
 
