@@ -130,21 +130,28 @@ impl<'a> Kalshi {
                 KalshiError::UserInputError(format!("Failed to parse JSON: {}", e))
             })?;
         
-        // Check if the response has an "orderbook" field
-        if !json_value.is_object() || !json_value.as_object().unwrap().contains_key("orderbook") {
-            eprintln!("ERROR: Response does not contain 'orderbook' field for ticker: {}", ticker);
+        // Check if the response has an "orderbook" or "orderbook_fp" field
+        if !json_value.is_object() || 
+           (!json_value.as_object().unwrap().contains_key("orderbook") && 
+            !json_value.as_object().unwrap().contains_key("orderbook_fp")) {
+            eprintln!("ERROR: Response does not contain 'orderbook' or 'orderbook_fp' field for ticker: {}", ticker);
             eprintln!("ERROR: Available keys: {:?}", json_value.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
             eprintln!("ERROR: Full response: {}", serde_json::to_string_pretty(&json_value).unwrap());
-            return Err(KalshiError::UserInputError("missing field `orderbook`".to_string()));
+            return Err(KalshiError::UserInputError("missing field `orderbook` or `orderbook_fp`".to_string()));
         }
+
+        // Manually extract the orderbook to avoid "duplicate field" errors from serde alias
+        let orderbook_val = json_value.get("orderbook_fp")
+            .or_else(|| json_value.get("orderbook"))
+            .ok_or_else(|| KalshiError::UserInputError("missing field `orderbook`".to_string()))?;
         
-        let res: OrderbookResponse = serde_json::from_value(json_value)
+        let orderbook: Orderbook = serde_json::from_value(orderbook_val.clone())
             .map_err(|e| {
-                eprintln!("ERROR: Failed to deserialize OrderbookResponse for ticker {}: {}", ticker, e);
+                eprintln!("ERROR: Failed to deserialize Orderbook for ticker {}: {}", ticker, e);
                 KalshiError::UserInputError(format!("Failed to deserialize: {}", e))
             })?;
         
-        Ok(res.orderbook)
+        Ok(orderbook)
     }
 
     /// Retrieves the orderbook for a specific market from the Kalshi exchange (without depth limit).
@@ -365,9 +372,9 @@ where
     Ok(opt.unwrap_or_default())
 }
 
-/// Deserializes dollar price levels from the API format [[string, number], ...]
-/// to Vec<(f32, i32)> where the string is converted to f32.
-fn deserialize_dollar_levels<'de, D>(d: D) -> Result<Vec<(f32, i32)>, D::Error>
+/// Deserializes dollar price levels from the API format [[string, number/string], ...]
+/// to Vec<(f32, f32)> where the string is converted to f32.
+fn deserialize_dollar_levels<'de, D>(d: D) -> Result<Vec<(f32, f32)>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -381,7 +388,7 @@ where
         return Ok(Vec::new());
     };
     
-    // Convert each [price_string, count] to (f32, i32)
+    // Convert each [price_string, count] to (f32, f32)
     let mut result = Vec::new();
     for item in arr {
         let level = item.as_array()
@@ -400,10 +407,14 @@ where
             _ => return Err(Error::custom("Price must be string or number")),
         };
         
-        // Parse count (should be a number)
-        let count: i32 = level[1].as_i64()
-            .ok_or_else(|| Error::custom("Count must be a number"))?
-            as i32;
+        // Parse count (can be string or number)
+        let count: f32 = match &level[1] {
+            serde_json::Value::String(s) => s.parse()
+                .map_err(|_| Error::custom(format!("Failed to parse count string: {}", s)))?,
+            serde_json::Value::Number(n) => n.as_f64()
+                .ok_or_else(|| Error::custom("Failed to convert count number to f64"))? as f32,
+            _ => return Err(Error::custom("Count must be string or number")),
+        };
         
         result.push((price, count));
     }
@@ -566,11 +577,11 @@ pub struct Orderbook {
     /// Price levels in dollars: [[price_dollars, count], ...]
     /// The price_dollars string from API is converted to f32 (4 dp, range 0-1)
     #[serde(default, deserialize_with = "deserialize_dollar_levels")]
-    pub yes_dollars: Vec<(f32, i32)>,
+    pub yes_dollars: Vec<(f32, f32)>,
     /// Price levels in dollars: [[price_dollars, count], ...]
     /// The price_dollars string from API is converted to f32 (4 dp, range 0-1)
     #[serde(default, deserialize_with = "deserialize_dollar_levels")]
-    pub no_dollars: Vec<(f32, i32)>,
+    pub no_dollars: Vec<(f32, f32)>,
 }
 
 /// Represents a market snapshot at a specific point in time.
@@ -683,5 +694,6 @@ struct SingleSeriesResponse {
 
 #[derive(Debug, Deserialize)]
 struct OrderbookResponse {
-    orderbook: Orderbook,
+    #[serde(alias = "orderbook_fp")]
+    pub orderbook: Orderbook,
 }
