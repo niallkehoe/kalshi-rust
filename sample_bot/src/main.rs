@@ -41,24 +41,23 @@ fn retreive_credentials(setting: APIType) -> Result<(String, String), std::io::E
 async fn main() {
     dotenv().ok();
 
-    let (username, password) = retreive_credentials(APIType::Demo).unwrap() ;
+    let key_id = env::var("DEMO_API_KEY").unwrap_or_else(|_| "dummy".to_string());
+    let pem_path = env::var("DEMO_PEM_PATH").unwrap_or_else(|_| "dummy.pem".to_string());
 
-    let mut kalshi_instance = Kalshi::new(kalshi::TradingEnvironment::DemoMode);
-
-    kalshi_instance.login(&username, &password).await;
+    let mut kalshi_instance = Kalshi::new(kalshi::TradingEnvironment::DemoMode, &key_id, &pem_path).await.unwrap();
 
     let new_york_ticker = "HIGHNY-23NOV13-T51".to_string();
 
-    let nytemp_market_data = kalshi_instance.get_single_market(&new_york_ticker).await.unwrap();
+    let nytemp_market_data = kalshi_instance.get_market(&new_york_ticker).await.unwrap();
     
-    let nytemp_market_orderbook = kalshi_instance.get_market_orderbook(&new_york_ticker, Some(10)).await.unwrap();
+    let nytemp_market_orderbook = kalshi_instance.get_orderbook(&new_york_ticker, Some(10)).await.unwrap();
 
 
       let bought_order = kalshi_instance
         .create_order(
             kalshi::Action::Buy,
             None,
-            1,
+            None,
             kalshi::Side::Yes,
             new_york_ticker,
             kalshi::OrderType::Limit,
@@ -66,7 +65,10 @@ async fn main() {
             None,
             None,
             None,
-            Some(5),
+            None,
+            Some("0.05".to_string()),
+            None,
+            Some("1.00".to_string()),
         )
         .await
         .unwrap();

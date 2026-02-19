@@ -136,8 +136,9 @@ impl<'a> Kalshi {
     ///
     /// # Returns
     ///
-    /// - `Ok((Order, i32))`: A tuple containing the updated `Order` object after cancellation
-    ///   and an integer indicating the amount by which the order was reduced on successful cancellation.
+    /// - `Ok((Order, i32, String))`: A tuple containing the updated `Order` object after cancellation,
+    ///   an integer indicating the amount by which the order was reduced, and a string representation
+    ///   of the reduction in fixed-point format.
     /// - `Err(KalshiError)`: An error if the user is not authenticated or if there is an issue with the request.
     ///
     /// # Example
@@ -145,13 +146,13 @@ impl<'a> Kalshi {
     /// ```
     /// // Assuming `kalshi_instance` is an already authenticated instance of `Kalshi`
     /// let order_id = "some_order_id";
-    /// let (order, reduced_by) = kalshi_instance.cancel_order(order_id).await.unwrap();
+    /// let (order, reduced_by, reduced_by_fp) = kalshi_instance.cancel_order(order_id).await.unwrap();
     /// ```
     ///
-    pub async fn cancel_order(&self, order_id: &str) -> Result<(Order, i32), KalshiError> {
+    pub async fn cancel_order(&self, order_id: &str) -> Result<(Order, i32, String), KalshiError> {
         let path = format!("{}/orders/{}", PORTFOLIO_PATH, order_id);
         let result: DeleteOrderResponse = self.signed_delete(&path).await?;
-        Ok((result.order, result.reduced_by))
+        Ok((result.order, result.reduced_by, result.reduced_by_fp))
     }
     /// Decreases the size of an existing order on the Kalshi exchange.
     ///
@@ -464,7 +465,7 @@ impl<'a> Kalshi {
         &self,
         action: Action,
         client_order_id: Option<String>,
-        count: i32,
+        count: Option<i32>,
         side: Side,
         ticker: String,
         input_type: OrderType,
@@ -475,7 +476,20 @@ impl<'a> Kalshi {
         sell_position_floor: Option<i32>,
         yes_price_dollars: Option<String>,
         no_price_dollars: Option<String>,
+        count_fp: Option<String>,
     ) -> Result<Order, KalshiError> {
+        // Either count or count_fp must be present, but not both.
+        if count.is_some() && count_fp.is_some() {
+            return Err(KalshiError::UserInputError(
+                "Cannot provide both count and count_fp".to_string(),
+            ));
+        }
+        if count.is_none() && count_fp.is_none() {
+            return Err(KalshiError::UserInputError(
+                "Must provide either count or count_fp".to_string(),
+            ));
+        }
+
         match input_type {
             OrderType::Limit => {
                 // Check if user provided both cent and dollar prices for the same side
@@ -523,6 +537,7 @@ impl<'a> Kalshi {
             action: action,
             client_order_id: unwrapped_id,
             count: count,
+            count_fp: count_fp,
             side: side,
             ticker: ticker,
             r#type: input_type,
@@ -575,12 +590,14 @@ impl<'a> Kalshi {
                     sell_position_floor,
                     yes_price_dollars,
                     no_price_dollars,
+                    count_fp,
                 ) = field.get_params();
 
                 CreateOrderPayload {
                     action,
                     client_order_id: client_order_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
                     count,
+                    count_fp,
                     side,
                     ticker,
                     r#type: input_type,
@@ -623,7 +640,7 @@ impl<'a> Kalshi {
     pub async fn batch_cancel_order(
         &self,
         ids: Vec<String>,
-    ) -> Result<Vec<Result<(Order, i32), KalshiError>>, KalshiError> {
+    ) -> Result<Vec<Result<(Order, i32, String), KalshiError>>, KalshiError> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -640,9 +657,9 @@ impl<'a> Kalshi {
 
         let mut out = Vec::with_capacity(response.orders.len());
         for item in response.orders {
-            match (item.order, item.reduced_by, item.error) {
-                (Some(order), Some(reduced_by), None) => out.push(Ok((order, reduced_by))),
-                (_, _, Some(err)) => out.push(Err(KalshiError::UserInputError(
+            match (item.order, item.reduced_by, item.reduced_by_fp, item.error) {
+                (Some(order), Some(reduced_by), Some(reduced_by_fp), None) => out.push(Ok((order, reduced_by, reduced_by_fp))),
+                (_, _, _, Some(err)) => out.push(Err(KalshiError::UserInputError(
                     err.message.unwrap_or_else(|| "unknown error".into()),
                 ))),
                 _ => out.push(Err(KalshiError::InternalError(
@@ -945,6 +962,7 @@ where
 struct DeleteOrderResponse {
     order: Order,
     reduced_by: i32,
+    reduced_by_fp: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -981,7 +999,10 @@ struct GetPositionsResponse {
 struct CreateOrderPayload {
     action: Action,
     client_order_id: String,
-    count: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    count: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count_fp: Option<String>,
     side: Side,
     ticker: String,
     r#type: OrderType,
@@ -1170,19 +1191,31 @@ pub struct Settlement {
 ///
 #[derive(Debug, Deserialize, Serialize)]
 pub struct EventPosition {
-    /// The total exposure amount in the event.
-    pub event_exposure: i64,
     /// The ticker of the event.
     pub event_ticker: String,
-    /// The total fees paid in the event in cents.
-    pub fees_paid: i64,
+    /// The total cost incurred in the event in cents.
+    pub total_cost: i64,
+    /// Total spent on this event in dollars
+    pub total_cost_dollars: String,
+    /// Total number of shares traded on this event (including both YES and NO contracts)
+    pub total_cost_shares: i64,
+    /// String representation of the total number of shares traded on this event
+    pub total_cost_shares_fp: String,
+    /// The total exposure amount in the event in cents.
+    pub event_exposure: i64,
+    /// Cost of the aggregate event position in dollars
+    pub event_exposure_dollars: String,
     /// The realized profit or loss in the event in cents.
     pub realized_pnl: i64,
+    /// Locked in profit and loss, in dollars
+    pub realized_pnl_dollars: String,
+    /// The total fees paid in the event in cents.
+    pub fees_paid: i64,
+    /// Fees paid on fill orders, in dollars
+    pub fees_paid_dollars: String,
     /// The count of resting (active but unfilled) orders in the event.
     #[serde(default)]
     pub resting_order_count: Option<i32>,
-    /// The total cost incurred in the event in cents.
-    pub total_cost: i64,
 }
 
 /// A user's position in a specific market on the Kalshi exchange.
@@ -1192,21 +1225,33 @@ pub struct EventPosition {
 ///
 #[derive(Debug, Deserialize, Serialize)]
 pub struct MarketPosition {
-    /// The total fees paid in the market in cents.
-    pub fees_paid: i64,
-    /// The total exposure amount in the market.
-    pub market_exposure: i64,
+    /// The ticker of the market.
+    pub ticker: String,
+    /// The total traded amount in the market in cents.
+    pub total_traded: i64,
+    /// Total spent on this market in dollars
+    pub total_traded_dollars: String,
     /// The current position of the user in the market.
     pub position: i32,
+    /// String representation of the number of contracts bought in this market.
+    pub position_fp: String,
+    /// The total exposure amount in the market in cents.
+    pub market_exposure: i64,
+    /// Cost of the aggregate market position in dollars
+    pub market_exposure_dollars: String,
     /// The realized profit or loss in the market in cents.
     pub realized_pnl: i64,
+    /// Locked in profit and loss, in dollars
+    pub realized_pnl_dollars: String,
+    /// The total fees paid in the market in cents.
+    pub fees_paid: i64,
+    /// Fees paid on fill orders, in dollars
+    pub fees_paid_dollars: String,
     /// The count of resting orders in the market.
     #[serde(default)]
     pub resting_orders_count: Option<i32>,
-    /// The ticker of the market.
-    pub ticker: String,
-    /// The total traded amount in the market.
-    pub total_traded: i64,
+    /// Last time the position is updated
+    pub last_updated_ts: Option<String>,
 }
 
 /// Represents the necessary fields for creating an order in the Kalshi exchange.
@@ -1220,8 +1265,10 @@ pub struct OrderCreationField {
     pub action: Action,
     /// Client-side identifier for the order. Optional.
     pub client_order_id: Option<String>,
-    /// The number of contracts or shares involved in the order.
-    pub count: i32,
+    /// The number of contracts or shares involved in the order. (LEGACY)
+    pub count: Option<i32>,
+    /// The number of contracts or shares involved in the order in fixed-point string format. Optional.
+    pub count_fp: Option<String>,
     /// The side (Yes/No) of the order.
     pub side: Side,
     /// Ticker of the market associated with the order.
@@ -1250,7 +1297,7 @@ impl OrderParams for OrderCreationField {
     ) -> (
         Action,
         Option<String>,
-        i32,
+        Option<i32>,
         Side,
         String,
         OrderType,
@@ -1259,6 +1306,7 @@ impl OrderParams for OrderCreationField {
         Option<i64>,
         Option<i64>,
         Option<i32>,
+        Option<String>,
         Option<String>,
         Option<String>,
     ) {
@@ -1276,6 +1324,7 @@ impl OrderParams for OrderCreationField {
             self.sell_position_floor,
             self.yes_price_dollars,
             self.no_price_dollars,
+            self.count_fp,
         )
     }
 }
@@ -1360,7 +1409,7 @@ trait OrderParams {
     ) -> (
         Action,
         Option<String>,
-        i32,
+        Option<i32>,
         Side,
         String,
         OrderType,
@@ -1369,6 +1418,7 @@ trait OrderParams {
         Option<i64>,
         Option<i64>,
         Option<i32>,
+        Option<String>,
         Option<String>,
         Option<String>,
     );
@@ -1378,7 +1428,7 @@ impl OrderParams
     for (
         Action,
         Option<String>,
-        i32,
+        Option<i32>,
         Side,
         String,
         OrderType,
@@ -1387,6 +1437,7 @@ impl OrderParams
         Option<i64>,
         Option<i64>,
         Option<i32>,
+        Option<String>,
         Option<String>,
         Option<String>,
     )
@@ -1396,7 +1447,7 @@ impl OrderParams
     ) -> (
         Action,
         Option<String>,
-        i32,
+        Option<i32>,
         Side,
         String,
         OrderType,
@@ -1407,9 +1458,10 @@ impl OrderParams
         Option<i32>,
         Option<String>,
         Option<String>,
+        Option<String>,
     ) {
         (
-            self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7, self.8, self.9, self.10, self.11, self.12,
+            self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7, self.8, self.9, self.10, self.11, self.12, self.13,
         )
     }
 }
@@ -1443,6 +1495,7 @@ struct BatchCreateOrderResponseItem {
 struct BatchCancelOrderResponseItem {
     order: Option<Order>,
     reduced_by: Option<i32>,
+    reduced_by_fp: Option<String>,
     error: Option<ApiError>,
 }
 

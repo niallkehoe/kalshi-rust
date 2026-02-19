@@ -111,7 +111,7 @@ pub mod utils {
             .create_order(
                 kalshi::Action::Buy,
                 None,
-                1,
+                None,
                 kalshi::Side::Yes,
                 get_test_market_ticker(),
                 kalshi::OrderType::Limit,
@@ -119,7 +119,10 @@ pub mod utils {
                 None,
                 None,
                 None,
-                Some(1), // Very low price
+                None,
+                Some("0.01".to_string()), // Very low price
+                None,
+                Some("1.00".to_string()),
             )
             .await
     }
