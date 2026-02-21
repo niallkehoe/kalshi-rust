@@ -132,12 +132,11 @@ impl<'a> Kalshi {
         
         // Check if the response has an "orderbook" or "orderbook_fp" field
         if !json_value.is_object() || 
-           (!json_value.as_object().unwrap().contains_key("orderbook") && 
-            !json_value.as_object().unwrap().contains_key("orderbook_fp")) {
-            eprintln!("ERROR: Response does not contain 'orderbook' or 'orderbook_fp' field for ticker: {}", ticker);
+           (!json_value.as_object().unwrap().contains_key("orderbook_fp")) {
+            eprintln!("ERROR: Response does not contain 'orderbook_fp' field for ticker: {}", ticker);
             eprintln!("ERROR: Available keys: {:?}", json_value.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
             eprintln!("ERROR: Full response: {}", serde_json::to_string_pretty(&json_value).unwrap());
-            return Err(KalshiError::UserInputError("missing field `orderbook` or `orderbook_fp`".to_string()));
+            return Err(KalshiError::UserInputError("missing field `orderbook_fp`".to_string()));
         }
 
         // Manually extract the orderbook to avoid "duplicate field" errors from serde alias
