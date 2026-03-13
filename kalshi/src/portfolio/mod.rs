@@ -383,31 +383,58 @@ impl<'a> Kalshi {
         ticker: Option<String>,
         event_ticker: Option<String>,
     ) -> Result<(Option<String>, Vec<EventPosition>, Vec<MarketPosition>), KalshiError> {
-        let mut params: Vec<(&str, String)> = Vec::with_capacity(6);
+        let mut all_event_positions = Vec::new();
+        let mut all_market_positions = Vec::new();
+        let mut current_cursor = cursor;
+        // Use provided limit for each page, or default to 1000 for maximum efficiency
+        let page_limit = limit.unwrap_or(1000);
 
-        add_param!(params, "limit", limit);
-        add_param!(params, "cursor", cursor);
-        add_param!(params, "count_filter", count_filter);
-        add_param!(params, "ticker", ticker);
-        add_param!(params, "event_ticker", event_ticker);
+        loop {
+            
+            let mut params: Vec<(&str, String)> = Vec::with_capacity(6);
+            add_param!(params, "limit", Some(page_limit));
+            add_param!(params, "cursor", current_cursor);
+            add_param!(params, "count_filter", count_filter);
+            add_param!(params, "ticker", ticker);
+            add_param!(params, "event_ticker", event_ticker);
 
-        let path = if params.is_empty() {
-            format!("{}/positions", PORTFOLIO_PATH)
-        } else {
-            let query_string = params
-                .iter()
-                .map(|(k, v)| format!("{}={}", k, v))
-                .collect::<Vec<_>>()
-                .join("&");
-            format!("{}/positions?{}", PORTFOLIO_PATH, query_string)
-        };
+            let query_string = if params.is_empty() {
+                String::new()
+            } else {
+                let qs = params
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect::<Vec<_>>()
+                    .join("&");
+                format!("?{}", qs)
+            };
 
-        let result: GetPositionsResponse = self.signed_get(&path).await?;
+            let path = format!("{}/positions{}", PORTFOLIO_PATH, query_string);
+
+            let result: GetPositionsResponse = self.signed_get(&path).await?;
+            
+            all_event_positions.extend(result.event_positions);
+            all_market_positions.extend(result.market_positions);
+
+            current_cursor = result.cursor;
+            
+            // If there's no cursor or it's empty, we've collected all pages.
+            if current_cursor.is_none() || current_cursor.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
+                break;
+            }
+            
+            // If a specific limit was requested and we have enough market positions, we can stop.
+            if let Some(l) = limit {
+                if all_market_positions.len() >= l as usize {
+                    break;
+                }
+            }
+        }
 
         Ok((
-            result.cursor,
-            result.event_positions,
-            result.market_positions,
+            None, // Return None for cursor since we've exhausted it
+            all_event_positions,
+            all_market_positions,
         ))
     }
 
@@ -1035,10 +1062,12 @@ pub struct Order {
     pub ticker: String,
     /// Current status of the order (e.g., resting, executed).
     pub status: OrderStatus,
-    /// Price of the 'Yes' option in the order (cents).
-    pub yes_price: i32,
-    /// Price of the 'No' option in the order (cents).
-    pub no_price: i32,
+    /// Price of the 'Yes' option in the order (cents, legacy; may be omitted).
+    #[serde(default)]
+    pub yes_price: Option<i32>,
+    /// Price of the 'No' option in the order (cents, legacy; may be omitted).
+    #[serde(default)]
+    pub no_price: Option<i32>,
 
     /// Timestamp when the order was created. Optional.
     #[serde(default)]
@@ -1194,22 +1223,27 @@ pub struct EventPosition {
     /// The ticker of the event.
     pub event_ticker: String,
     /// The total cost incurred in the event in cents.
+    #[serde(default)]
     pub total_cost: i64,
     /// Total spent on this event in dollars
     pub total_cost_dollars: String,
     /// Total number of shares traded on this event (including both YES and NO contracts)
+    #[serde(default)]
     pub total_cost_shares: i64,
     /// String representation of the total number of shares traded on this event
     pub total_cost_shares_fp: String,
     /// The total exposure amount in the event in cents.
+    #[serde(default)]
     pub event_exposure: i64,
     /// Cost of the aggregate event position in dollars
     pub event_exposure_dollars: String,
     /// The realized profit or loss in the event in cents.
+    #[serde(default)]
     pub realized_pnl: i64,
     /// Locked in profit and loss, in dollars
     pub realized_pnl_dollars: String,
     /// The total fees paid in the event in cents.
+    #[serde(default)]
     pub fees_paid: i64,
     /// Fees paid on fill orders, in dollars
     pub fees_paid_dollars: String,
@@ -1228,22 +1262,27 @@ pub struct MarketPosition {
     /// The ticker of the market.
     pub ticker: String,
     /// The total traded amount in the market in cents.
+    #[serde(default)]
     pub total_traded: i64,
     /// Total spent on this market in dollars
     pub total_traded_dollars: String,
     /// The current position of the user in the market.
+    #[serde(default)]
     pub position: i32,
     /// String representation of the number of contracts bought in this market.
     pub position_fp: String,
     /// The total exposure amount in the market in cents.
+    #[serde(default)]
     pub market_exposure: i64,
     /// Cost of the aggregate market position in dollars
     pub market_exposure_dollars: String,
     /// The realized profit or loss in the market in cents.
+    #[serde(default)]
     pub realized_pnl: i64,
     /// Locked in profit and loss, in dollars
     pub realized_pnl_dollars: String,
     /// The total fees paid in the market in cents.
+    #[serde(default)]
     pub fees_paid: i64,
     /// Fees paid on fill orders, in dollars
     pub fees_paid_dollars: String,
