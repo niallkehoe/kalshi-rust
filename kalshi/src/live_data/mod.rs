@@ -1,6 +1,8 @@
 use super::Kalshi;
 use crate::kalshi_error::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+
+pub use crate::generated::types::LiveData;
 
 impl Kalshi {
     /// Retrieves live data for a specific milestone.
@@ -56,6 +58,35 @@ impl Kalshi {
     /// let live_data_batch = kalshi_instance.get_live_data_batch(milestone_ids).await.unwrap();
     /// ```
     ///
+    /// Retrieves live data for a specific milestone (preferred endpoint).
+    ///
+    /// # Arguments
+    /// * `milestone_id` - The milestone ID to get live data for.
+    /// * `include_player_stats` - When true, includes player-level statistics (for supported sports).
+    pub async fn get_live_data_by_milestone(
+        &self,
+        milestone_id: &str,
+        include_player_stats: Option<bool>,
+    ) -> Result<LiveData, KalshiError> {
+        let mut path = format!("/live_data/milestone/{}", milestone_id);
+        if let Some(true) = include_player_stats {
+            path.push_str("?include_player_stats=true");
+        }
+        self.signed_get(&path).await
+    }
+
+    /// Retrieves game stats (play-by-play) for a specific milestone.
+    ///
+    /// # Arguments
+    /// * `milestone_id` - The milestone ID to get game stats for.
+    pub async fn get_game_stats(
+        &self,
+        milestone_id: &str,
+    ) -> Result<serde_json::Value, KalshiError> {
+        let path = format!("/live_data/milestone/{}/game_stats", milestone_id);
+        self.signed_get(&path).await
+    }
+
     pub async fn get_live_data_batch(
         &self,
         milestone_ids: Vec<String>,
@@ -82,19 +113,4 @@ struct LiveDataBatchResponse {
     live_datas: Vec<LiveData>,
 }
 
-// -------- Public models --------
-
-/// Represents real-time live data for a milestone.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct LiveData {
-    /// The type of live data.
-    #[serde(rename = "type")]
-    pub data_type: String,
-    /// The milestone ID this data is associated with.
-    pub milestone_id: Option<String>,
-    /// Detailed data fields.
-    pub details: serde_json::Value,
-    /// The timestamp when this data was last updated.
-    pub last_updated_ts: Option<String>,
-}
 

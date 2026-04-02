@@ -1,7 +1,16 @@
 use super::Kalshi;
 use crate::kalshi_error::*;
-use serde::{Deserialize, Serialize, Deserializer};
-use std::collections::HashMap;
+// All public types are re-exported from the OpenAPI-generated module.
+pub use crate::generated::types::{
+    GetMarketOrderbookResponse, GetMarketOrderbooksResponse, GetMarketResponse, GetMarketsResponse,
+    GetSeriesListResponse, GetSeriesResponse, GetTradesResponse, Market, MarketCandlestick,
+    MarketCandlesticksResponse, MarketMarketType, MarketOrderbookFp, MarketResult, MarketStatus,
+    MultivariateEventCollection, OrderbookCountFp, PriceLevelDollarsCountFp, Series,
+    SettlementSource, Trade, TradeTakerSide,
+};
+
+/// Alias for [`OrderbookCountFp`] — the dollar-denominated orderbook returned by the API.
+pub type Orderbook = OrderbookCountFp;
 
 impl<'a> Kalshi {
     /// Retrieves a list of markets from the Kalshi exchange based on specified criteria.
@@ -55,10 +64,11 @@ impl<'a> Kalshi {
         add_param!(p, "min_close_ts", min_close_ts);
         add_param!(p, "max_close_ts", max_close_ts);
 
-        let res: MarketListResponse = self.client
+        let res: GetMarketsResponse = self.client
             .get(reqwest::Url::parse_with_params(&url, &p)?)
             .send().await?.json().await?;
-        Ok((res.cursor, res.markets))
+        let cursor = if res.cursor.is_empty() { None } else { Some(res.cursor) };
+        Ok((cursor, res.markets))
     }
 
     /// Retrieves detailed information about a specific market from the Kalshi exchange.
@@ -85,7 +95,7 @@ impl<'a> Kalshi {
     ///
     pub async fn get_market(&self, ticker: &str) -> Result<Market, KalshiError> {
         let url = format!("{}/markets/{}", self.base_url, ticker);
-        let res: SingleMarketResponse = self.client.get(url).send().await?.json().await?;
+        let res: GetMarketResponse = self.client.get(url).send().await?.json().await?;
         Ok(res.market)
     }
 
@@ -101,7 +111,7 @@ impl<'a> Kalshi {
     ///
     /// # Returns
     ///
-    /// - `Ok(Orderbook)`: The current orderbook data for the specified market on successful retrieval.
+    /// - `Ok(OrderbookCountFp)`: The current orderbook data for the specified market on successful retrieval.
     /// - `Err(KalshiError)`: An error if there is an issue with the request.
     ///
     /// # Example
@@ -112,69 +122,17 @@ impl<'a> Kalshi {
     /// let orderbook = kalshi_instance.get_orderbook(ticker, Some(10)).await.unwrap();
     /// ```
     ///
-    pub async fn get_orderbook(&self, ticker: &str, depth: Option<i32>) -> Result<Orderbook, KalshiError> {
+    pub async fn get_orderbook(&self, ticker: &str, depth: Option<i32>) -> Result<OrderbookCountFp, KalshiError> {
         let mut url = format!("{}/markets/{}/orderbook", self.base_url, ticker);
-        
         if let Some(d) = depth {
             url.push_str(&format!("?depth={}", d));
         }
-        
-        let response = self.client.get(&url).send().await?;
-        let response_text = response.text().await?;
-        
-        // Try to parse as JSON first to see what we're getting
-        let json_value: serde_json::Value = serde_json::from_str(&response_text)
-            .map_err(|e| {
-                eprintln!("ERROR: Failed to parse response as JSON for ticker {}: {}", ticker, e);
-                eprintln!("ERROR: Raw response: {}", response_text);
-                KalshiError::UserInputError(format!("Failed to parse JSON: {}", e))
-            })?;
-        
-        // Check if the response has an "orderbook" or "orderbook_fp" field
-        if !json_value.is_object() || 
-           (!json_value.as_object().unwrap().contains_key("orderbook_fp")) {
-            eprintln!("ERROR: Response does not contain 'orderbook_fp' field for ticker: {}", ticker);
-            eprintln!("ERROR: Available keys: {:?}", json_value.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
-            eprintln!("ERROR: Full response: {}", serde_json::to_string_pretty(&json_value).unwrap());
-            return Err(KalshiError::UserInputError("missing field `orderbook_fp`".to_string()));
-        }
-
-        // Manually extract the orderbook to avoid "duplicate field" errors from serde alias
-        let orderbook_val = json_value.get("orderbook_fp")
-            .or_else(|| json_value.get("orderbook"))
-            .ok_or_else(|| KalshiError::UserInputError("missing field `orderbook`".to_string()))?;
-        
-        let orderbook: Orderbook = serde_json::from_value(orderbook_val.clone())
-            .map_err(|e| {
-                eprintln!("ERROR: Failed to deserialize Orderbook for ticker {}: {}", ticker, e);
-                KalshiError::UserInputError(format!("Failed to deserialize: {}", e))
-            })?;
-        
-        Ok(orderbook)
+        let res: GetMarketOrderbookResponse = self.client.get(&url).send().await?.json().await?;
+        Ok(res.orderbook_fp)
     }
 
-    /// Retrieves the orderbook for a specific market from the Kalshi exchange (without depth limit).
-    ///
-    /// This is a convenience method that calls `get_orderbook(ticker, None)`.
-    ///
-    /// # Arguments
-    ///
-    /// * `ticker` - A string slice referencing the market's unique ticker identifier.
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(Orderbook)`: The current orderbook data for the specified market on successful retrieval.
-    /// - `Err(KalshiError)`: An error if there is an issue with the request.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// // Assuming `kalshi_instance` is an instance of `Kalshi`
-    /// let ticker = "SOME-MARKET-2024";
-    /// let orderbook = kalshi_instance.get_orderbook_full(ticker).await.unwrap();
-    /// ```
-    ///
-    pub async fn get_orderbook_full(&self, ticker: &str) -> Result<Orderbook, KalshiError> {
+    /// Retrieves the orderbook for a specific market (without depth limit).
+    pub async fn get_orderbook_full(&self, ticker: &str) -> Result<OrderbookCountFp, KalshiError> {
         self.get_orderbook(ticker, None).await
     }
 
@@ -212,7 +170,7 @@ impl<'a> Kalshi {
         start_ts: Option<i64>,
         end_ts: Option<i64>,
         period_interval: Option<i32>,
-    ) -> Result<Vec<Candle>, KalshiError> {
+    ) -> Result<Vec<MarketCandlestick>, KalshiError> {
         let url = format!("{}/series/{}/markets/{}/candlesticks",
                           self.base_url, series_ticker, ticker);
         let mut p = vec![];
@@ -220,7 +178,7 @@ impl<'a> Kalshi {
         add_param!(p, "end_ts", end_ts);
         add_param!(p, "period_interval", period_interval);
 
-        let res: CandlestickListResponse = self.client
+        let res: MarketCandlesticksResponse = self.client
             .get(reqwest::Url::parse_with_params(&url, &p)?)
             .send().await?.json().await?;
         Ok(res.candlesticks)
@@ -268,10 +226,11 @@ impl<'a> Kalshi {
         add_param!(p, "min_ts", min_ts);
         add_param!(p, "max_ts", max_ts);
 
-        let res: TradeListResponse = self.client
+        let res: GetTradesResponse = self.client
             .get(reqwest::Url::parse_with_params(&url, &p)?)
             .send().await?.json().await?;
-        Ok((res.cursor, res.trades))
+        let cursor = if res.cursor.is_empty() { None } else { Some(res.cursor) };
+        Ok((cursor, res.trades))
     }
 
     /// Retrieves a list of series from the Kalshi exchange based on specified criteria.
@@ -307,29 +266,41 @@ impl<'a> Kalshi {
         cursor: Option<String>,
         category: Option<String>,
         tags: Option<String>,
-    ) -> Result<(Option<String>, Vec<Series>), KalshiError> {
-        // --- build query string ------------------------------------------------
+    ) -> Result<Vec<Series>, KalshiError> {
         let mut p = Vec::new();
         add_param!(p, "limit",    limit);
         add_param!(p, "cursor",   cursor);
         add_param!(p, "category", category);
         add_param!(p, "tags",     tags);
-    
+
         let path = if p.is_empty() {
             "/series".to_string()
         } else {
             format!("/series?{}", serde_urlencoded::to_string(&p)?)
         };
-    
-        // --- signed GET --------------------------------------------------------
-        #[derive(Debug, serde::Deserialize)]
-        struct SeriesListResponse {
-            cursor: Option<String>,
-            series: Option<Vec<Series>>,   // ← tolerate `null`
+
+        // The API returns `null` for array fields inside Series (e.g. tags, settlement_sources,
+        // additional_prohibitions). Patch nulls to [] before deserializing the generated type.
+        let mut raw: serde_json::Value = self.signed_get(&path).await?;
+        if let Some(arr) = raw.get_mut("series").and_then(|v| v.as_array_mut()) {
+            for series in arr.iter_mut() {
+                if let Some(obj) = series.as_object_mut() {
+                    for key in ["additional_prohibitions", "settlement_sources", "tags"] {
+                        if obj.get(key).map_or(false, |v| v.is_null()) {
+                            obj.insert(key.to_string(), serde_json::Value::Array(vec![]));
+                        }
+                    }
+                }
+            }
         }
-    
-        let res: SeriesListResponse = self.signed_get(&path).await?;
-        Ok((res.cursor, res.series.unwrap_or_default()))
+        #[derive(serde::Deserialize)]
+        struct SeriesListResponse {
+            #[serde(default)]
+            series: Option<Vec<Series>>,
+        }
+        let res: SeriesListResponse = serde_json::from_value(raw)
+            .map_err(|e| KalshiError::UserInputError(format!("series deserialization: {}", e)))?;
+        Ok(res.series.unwrap_or_default())
     }
 
     /// Retrieves detailed information about a specific series from the Kalshi exchange.
@@ -356,366 +327,51 @@ impl<'a> Kalshi {
     ///
     pub async fn get_series(&self, series_ticker: &str) -> Result<Series, KalshiError> {
         let url = format!("{}/series/{}", self.base_url, series_ticker);
-        let res: SingleSeriesResponse = self.client.get(url).send().await?.json().await?;
+        let res: GetSeriesResponse = self.client.get(url).send().await?.json().await?;
         Ok(res.series)
     }
-}
 
-/// When the API gives `"field": null` treat it as an empty Vec.
-fn null_to_empty_vec<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::Deserialize<'de>,
-{
-    let opt = Option::<Vec<T>>::deserialize(d)?;
-    Ok(opt.unwrap_or_default())
-}
-
-/// Deserializes dollar price levels from the API format [[string, number/string], ...]
-/// to Vec<(f32, f32)> where the string is converted to f32.
-fn deserialize_dollar_levels<'de, D>(d: D) -> Result<Vec<(f32, f32)>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use serde::de::Error;
-    
-    // First, deserialize as a Vec of generic JSON values
-    let opt = Option::<Vec<serde_json::Value>>::deserialize(d)?;
-    
-    // If null or missing, return empty vec
-    let Some(arr) = opt else {
-        return Ok(Vec::new());
-    };
-    
-    // Convert each [price_string, count] to (f32, f32)
-    let mut result = Vec::new();
-    for item in arr {
-        let level = item.as_array()
-            .ok_or_else(|| Error::custom("Expected array for price level"))?;
-        
-        if level.len() != 2 {
-            return Err(Error::custom("Expected array of length 2 for price level"));
-        }
-        
-        // Parse price (can be string or number)
-        let price: f32 = match &level[0] {
-            serde_json::Value::String(s) => s.parse()
-                .map_err(|_| Error::custom(format!("Failed to parse price string: {}", s)))?,
-            serde_json::Value::Number(n) => n.as_f64()
-                .ok_or_else(|| Error::custom("Failed to convert price number to f64"))? as f32,
-            _ => return Err(Error::custom("Price must be string or number")),
-        };
-        
-        // Parse count (can be string or number)
-        let count: f32 = match &level[1] {
-            serde_json::Value::String(s) => s.parse()
-                .map_err(|_| Error::custom(format!("Failed to parse count string: {}", s)))?,
-            serde_json::Value::Number(n) => n.as_f64()
-                .ok_or_else(|| Error::custom("Failed to convert count number to f64"))? as f32,
-            _ => return Err(Error::custom("Count must be string or number")),
-        };
-        
-        result.push((price, count));
+    /// Retrieves orderbooks for multiple markets in a single request.
+    ///
+    /// Returns a list of `(ticker, orderbook)` pairs. The orderbook format is the
+    /// full-precision dollar format (`orderbook_fp`) from the API.
+    ///
+    /// # Arguments
+    /// * `tickers` - Slice of market tickers (1–100).
+    pub async fn get_market_orderbooks(
+        &self,
+        tickers: &[&str],
+    ) -> Result<Vec<MarketOrderbookFp>, KalshiError> {
+        let qs = tickers.iter().map(|t| format!("tickers={}", t)).collect::<Vec<_>>().join("&");
+        let path = format!("/markets/orderbooks?{}", qs);
+        let res: GetMarketOrderbooksResponse = self.signed_get(&path).await?;
+        Ok(res.orderbooks)
     }
-    
-    Ok(result)
+
+    /// Retrieves candlesticks for multiple markets in a single batch request.
+    ///
+    /// Returns the raw JSON response since the batch format contains per-ticker
+    /// candlestick arrays with complex types.
+    ///
+    /// # Arguments
+    /// * `tickers` - Comma-separated market tickers.
+    /// * `start_ts` - Start Unix timestamp.
+    /// * `end_ts` - End Unix timestamp.
+    /// * `period_interval` - Interval in minutes: 1, 60, or 1440.
+    pub async fn batch_get_market_candlesticks(
+        &self,
+        tickers: &str,
+        start_ts: i64,
+        end_ts: i64,
+        period_interval: i32,
+    ) -> Result<serde_json::Value, KalshiError> {
+        let path = format!(
+            "/markets/candlesticks?tickers={}&start_ts={}&end_ts={}&period_interval={}",
+            tickers, start_ts, end_ts, period_interval
+        );
+        self.signed_get(&path).await
+    }
 }
 
-// -------- public models --------
 
-/// Represents an event on the Kalshi exchange.
-///
-/// An event is a prediction market that contains multiple markets for trading.
-/// Events can have various statuses and may include nested markets.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Event {
-    pub event_ticker: String,
-    pub series_ticker: String,
-    pub title: String,
-    pub sub_title: String,
-    pub mutually_exclusive: bool,
-    pub category: String,
-    pub collateral_return_type: String,
-    pub available_on_brokers: bool,
-    pub product_metadata: Option<serde_json::Value>,
-    pub strike_date: Option<String>,
-    pub strike_period: Option<String>,
-    pub markets: Option<Vec<Market>>,
-}
 
-/// Represents a market on the Kalshi exchange.
-///
-/// A market is a specific trading instrument within an event, representing
-/// a binary outcome that users can trade on (Yes/No).
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Market {
-    pub ticker: String,
-    pub event_ticker: String,
-    pub market_type: String,
-    pub title: String,
-    pub subtitle: String,
-    pub yes_sub_title: String,
-    pub no_sub_title: String,
-    pub created_time: String,
-    pub updated_time: String,
-    pub open_time: String,
-    pub close_time: String,
-    pub expected_expiration_time: Option<String>,
-    pub expiration_time: Option<String>,
-    pub latest_expiration_time: String,
-    pub settlement_timer_seconds: i64,
-    pub status: String,
-    pub response_price_units: String,
-    pub notional_value: i64,
-    pub notional_value_dollars: String,
-    pub tick_size: i64,
-    pub yes_bid: i64,
-    pub yes_bid_dollars: String,
-    pub yes_ask: i64,
-    pub yes_ask_dollars: String,
-    pub no_bid: i64,
-    pub no_bid_dollars: String,
-    pub no_ask: i64,
-    pub no_ask_dollars: String,
-    pub last_price: i64,
-    pub last_price_dollars: String,
-    pub previous_yes_bid: i64,
-    pub previous_yes_bid_dollars: String,
-    pub previous_yes_ask: i64,
-    pub previous_yes_ask_dollars: String,
-    pub previous_price: i64,
-    pub previous_price_dollars: String,
-    pub volume: i64,
-    pub volume_fp: String,
-    pub volume_24h: i64,
-    pub volume_24h_fp: String,
-    pub liquidity: i64,
-    pub liquidity_dollars: String,
-    pub open_interest: i64,
-    pub open_interest_fp: String,
-    pub result: SettlementResult,
-    pub cap_strike: Option<f64>,
-    pub can_close_early: bool,
-    pub fractional_trading_enabled: bool,
-    pub expiration_value: String,
-    pub category: String,
-    pub risk_limit_cents: i64,
-    pub strike_type: Option<String>,
-    pub floor_strike: Option<f64>,
-    pub rules_primary: String,
-    pub rules_secondary: String,
-    pub settlement_value: Option<String>,
-    pub settlement_value_dollars: Option<String>,
-    pub settlement_ts: Option<String>,
-    pub functional_strike: Option<String>,
-    pub price_level_structure: String,
-    pub price_ranges: Vec<serde_json::Value>,
-}
-
-/// Represents a series on the Kalshi exchange.
-///
-/// A series is a collection of related events and markets, typically
-/// organized around a common theme or category.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Series {
-    #[serde(default)]
-    pub ticker: Option<String>,
-    #[serde(default)]
-    pub frequency: Option<String>,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub category: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_empty_vec"
-    )]
-    pub tags: Vec<String>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_empty_vec"
-    )]
-    pub settlement_sources: Vec<SettlementSource>,
-    #[serde(default)]
-    pub contract_url: Option<String>,
-    #[serde(flatten)]
-    pub extra: HashMap<String, serde_json::Value>,
-}
-
-/// Represents a multivariate event collection on the Kalshi exchange.
-///
-/// A multivariate event collection contains multiple related markets
-/// that are analyzed together as a group.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct MultivariateEventCollection {
-    pub collection_ticker: String,
-    pub title: String,
-    pub description: String,
-    pub category: String,
-    #[serde(
-        default,
-        deserialize_with = "null_to_empty_vec"
-    )]
-    pub tags: Vec<String>,
-    #[serde(
-        default,
-        deserialize_with = "null_to_empty_vec"
-    )]
-    pub markets: Vec<Market>,
-    pub created_time: String,
-    pub updated_time: String,
-}
-
-/// Represents a candlestick data point for market analysis.
-///
-/// Candlesticks provide historical price data including open, high, low, and close
-/// prices for both Yes and No sides of a market over a specific time period.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Candle {
-    pub start_ts: i64,
-    pub end_ts: i64,
-    pub yes_open: i32,
-    pub yes_high: i32,
-    pub yes_low: i32,
-    pub yes_close: i32,
-    pub no_open: i32,
-    pub no_high: i32,
-    pub no_low: i32,
-    pub no_close: i32,
-    pub volume: i64,
-    pub open_interest: i64,
-}
-
-/// Represents the orderbook for a market on the Kalshi exchange.
-///
-/// The orderbook contains current bid and ask orders for both Yes and No sides
-/// of a market, showing the current market depth and liquidity.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Orderbook {
-    /// Price levels in cents: [[price_cents, count], ...]
-    pub yes: Option<Vec<Vec<i32>>>,
-    /// Price levels in cents: [[price_cents, count], ...]
-    pub no: Option<Vec<Vec<i32>>>,
-    /// Price levels in dollars: [[price_dollars, count], ...]
-    /// The price_dollars string from API is converted to f32 (4 dp, range 0-1)
-    #[serde(default, deserialize_with = "deserialize_dollar_levels")]
-    pub yes_dollars: Vec<(f32, f32)>,
-    /// Price levels in dollars: [[price_dollars, count], ...]
-    /// The price_dollars string from API is converted to f32 (4 dp, range 0-1)
-    #[serde(default, deserialize_with = "deserialize_dollar_levels")]
-    pub no_dollars: Vec<(f32, f32)>,
-}
-
-/// Represents a market snapshot at a specific point in time.
-///
-/// A snapshot provides a summary of market activity including current prices,
-/// volume, and open interest at a specific timestamp.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Snapshot {
-    pub yes_price: i32,
-    pub yes_bid: i32,
-    pub yes_ask: i32,
-    pub no_bid: i32,
-    pub no_ask: i32,
-    pub volume: i32,
-    pub open_interest: i32,
-    pub ts: i64,
-}
-
-/// Represents a trade executed on the Kalshi exchange.
-///
-/// A trade represents a completed transaction between a buyer and seller,
-/// including the price, quantity, and timing of the execution.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Trade {
-    pub trade_id: String,
-    pub taker_side: String,
-    pub ticker: String,
-    pub count: i32,
-    pub yes_price: i32,
-    pub no_price: i32,
-    pub created_time: String,
-}
-
-/// Represents the possible settlement results for a market.
-///
-/// Markets can settle in various ways depending on the outcome of the event
-/// and the specific market rules.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SettlementResult {
-    Yes,
-    No,
-    #[serde(rename = "")]
-    Void,
-    #[serde(rename = "all_no")]
-    AllNo,
-    #[serde(rename = "all_yes")]
-    AllYes,
-}
-
-/// Represents the possible statuses of a market.
-///
-/// Markets can be in various states throughout their lifecycle from creation to settlement.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum MarketStatus {
-    Open,
-    Closed,
-    Settled,
-}
-
-/// Represents a settlement source for a series.
-///
-/// Settlement sources provide the data or methodology used to determine
-/// the final outcome of markets in a series.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct SettlementSource {
-    #[serde(default)]
-    pub url: Option<String>,
-    #[serde(default)]
-    pub name: Option<String>,
-}
-
-// -------- response wrappers --------
-
-#[derive(Debug, Deserialize)]
-struct MarketListResponse {
-    cursor: Option<String>,
-    markets: Vec<Market>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SeriesListResponse {
-    cursor: Option<String>,
-    #[serde(default)]
-    series: Vec<Series>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TradeListResponse {
-    cursor: Option<String>,
-    trades: Vec<Trade>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CandlestickListResponse {
-    cursor: Option<String>,
-    candlesticks: Vec<Candle>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SingleMarketResponse {
-    market: Market,
-}
-
-#[derive(Debug, Deserialize)]
-struct SingleSeriesResponse {
-    series: Series,
-}
-
-#[derive(Debug, Deserialize)]
-struct OrderbookResponse {
-    #[serde(alias = "orderbook_fp")]
-    pub orderbook: Orderbook,
-}

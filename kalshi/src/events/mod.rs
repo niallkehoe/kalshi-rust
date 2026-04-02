@@ -1,7 +1,8 @@
 use super::Kalshi;
 use crate::kalshi_error::*;
-use crate::market::Event; // Import from market module
 use serde::{Deserialize, Serialize};
+
+pub use crate::generated::types::{EventData as Event, MarketCandlestick};
 
 impl Kalshi {
     /// Retrieves a list of events from the Kalshi exchange based on specified criteria.
@@ -82,6 +83,33 @@ impl Kalshi {
     /// let event = kalshi_instance.get_event(event_ticker).await.unwrap();
     /// ```
     ///
+    /// Retrieves multivariate (combo) events, optionally filtered by series or collection.
+    pub async fn get_multivariate_events(
+        &self,
+        limit: Option<i64>,
+        cursor: Option<String>,
+        series_ticker: Option<String>,
+        collection_ticker: Option<String>,
+        with_nested_markets: Option<bool>,
+    ) -> Result<(Option<String>, Vec<Event>), KalshiError> {
+        let mut params: Vec<(&str, String)> = Vec::new();
+        add_param!(params, "limit", limit);
+        add_param!(params, "cursor", cursor);
+        add_param!(params, "series_ticker", series_ticker);
+        add_param!(params, "collection_ticker", collection_ticker);
+        add_param!(params, "with_nested_markets", with_nested_markets);
+
+        let path = if params.is_empty() {
+            "/events/multivariate".to_string()
+        } else {
+            let qs = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&");
+            format!("/events/multivariate?{}", qs)
+        };
+
+        let res: MultivariateEventListResponse = self.signed_get(&path).await?;
+        Ok((res.cursor, res.events))
+    }
+
     pub async fn get_event(&self, event_ticker: &str) -> Result<Event, KalshiError> {
         let path = format!("/events/{}", event_ticker);
         self.signed_get(&path).await
@@ -121,7 +149,7 @@ impl Kalshi {
         start_ts: Option<i64>,
         end_ts: Option<i64>,
         period_interval: Option<String>,
-    ) -> Result<Vec<Candlestick>, KalshiError> {
+    ) -> Result<Vec<MarketCandlestick>, KalshiError> {
         let path = format!("/series/{}/events/{}/candlesticks", series_ticker, event_ticker);
         let mut params = vec![];
         add_param!(params, "start_ts", start_ts);
@@ -199,38 +227,26 @@ struct EventListResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct MultivariateEventListResponse {
+    cursor: Option<String>,
+    events: Vec<Event>,
+}
+
+#[derive(Debug, Deserialize)]
 struct SingleEventResponse {
     event: Event,
 }
 
 #[derive(Debug, Deserialize)]
 struct CandlestickResponse {
-    candlesticks: Vec<Candlestick>,
+    candlesticks: Vec<MarketCandlestick>,
 }
 
 // -------- Public models --------
 
-/// Represents candlestick data for event-level aggregated trading.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Candlestick {
-    /// The timestamp for this candlestick period.
-    pub ts: String,
-    /// Opening price for the period.
-    pub open: Option<i64>,
-    /// Highest price during the period.
-    pub high: Option<i64>,
-    /// Lowest price during the period.
-    pub low: Option<i64>,
-    /// Closing price for the period.
-    pub close: Option<i64>,
-    /// Trading volume during the period.
-    pub volume: Option<i64>,
-}
-
 /// Represents additional metadata for an event.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct EventMetadata {
-    /// Metadata fields as key-value pairs.
     #[serde(flatten)]
     pub fields: std::collections::HashMap<String, serde_json::Value>,
 }
@@ -238,16 +254,13 @@ pub struct EventMetadata {
 /// Represents forecast percentile history for an event.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ForecastPercentileHistory {
-    /// Historical forecast data points.
     pub history: Vec<ForecastDataPoint>,
 }
 
 /// Represents a single forecast data point.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ForecastDataPoint {
-    /// The timestamp for this forecast.
     pub ts: String,
-    /// Forecast percentile values.
     pub percentiles: std::collections::HashMap<String, f64>,
 }
 

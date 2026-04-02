@@ -106,24 +106,29 @@ pub mod utils {
     
     /// Create a minimal test order that's unlikely to execute
     pub async fn create_test_order(kalshi: &Kalshi) -> Result<kalshi::Order, KalshiError> {
-        // Create an order with very low probability of execution for testing
         kalshi
-            .create_order(
-                kalshi::Action::Buy,
-                None,
-                None,
-                kalshi::Side::Yes,
-                get_test_market_ticker(),
-                kalshi::OrderType::Limit,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some("0.01".to_string()), // Very low price
-                None,
-                Some("1.00".to_string()),
-            )
+            .create_order(kalshi::CreateOrderRequest {
+                action: kalshi::CreateOrderRequestAction::Buy,
+                side: kalshi::CreateOrderRequestSide::Yes,
+                ticker: get_test_market_ticker(),
+                yes_price: Some(std::num::NonZeroU64::new(1).unwrap()), // 1 cent - very low
+                count: Some(std::num::NonZeroU64::new(1).unwrap()),
+                buy_max_cost: None,
+                cancel_order_on_pause: None,
+                client_order_id: None,
+                count_fp: None,
+                expiration_ts: None,
+                no_price: None,
+                no_price_dollars: None,
+                order_group_id: None,
+                post_only: None,
+                reduce_only: None,
+                self_trade_prevention_type: None,
+                sell_position_floor: None,
+                subaccount: 0,
+                time_in_force: None,
+                yes_price_dollars: None,
+            })
             .await
     }
 } 

@@ -1,9 +1,16 @@
 use super::Kalshi;
 use crate::kalshi_error::*;
-use std::fmt;
-use uuid::Uuid;
-
 use serde::{Deserialize, Deserializer, Serialize};
+
+// All public types are re-exported from the OpenAPI-generated module.
+pub use crate::generated::types::{
+    AmendOrderRequest, CreateOrderRequest, CreateOrderRequestAction, CreateOrderRequestSide,
+    CreateOrderRequestTimeInForce, CreateSubaccountResponse, DecreaseOrderRequest, EventPosition,
+    Fill, FillAction as Action, FillSide as Side, FixedPointCount, FixedPointDollars,
+    MarketPosition, Order, OrderAction, OrderGroup, OrderQueuePosition, OrderSide, OrderStatus,
+    OrderType, SelfTradePreventionType, Settlement, SubaccountBalance, SubaccountNettingConfig,
+    SubaccountTransfer,
+};
 
 const PORTFOLIO_PATH: &str = "/portfolio";
 
@@ -185,38 +192,9 @@ impl<'a> Kalshi {
     ///     .await?;
     /// ```
     ///
-    pub async fn decrease_order(
-        &self,
-        order_id: &str,
-        reduce_by: Option<i32>,
-        reduce_to: Option<i32>,
-    ) -> Result<Order, KalshiError> {
-        match (reduce_by, reduce_to) {
-            (Some(_), Some(_)) => {
-                return Err(KalshiError::UserInputError(
-                    "Can only provide reduce_by strict exclusive or reduce_to, can't provide both"
-                        .to_string(),
-                ));
-            }
-            (None, None) => {
-                return Err(KalshiError::UserInputError(
-                    "Must provide either reduce_by exclusive or reduce_to, can't provide neither"
-                        .to_string(),
-                ));
-            }
-            _ => {}
-        }
-
-        let decrease_payload = DecreaseOrderPayload {
-            reduce_by: reduce_by,
-            reduce_to: reduce_to,
-        };
-
-        // v2 portfolio API: POST /orders/{order_id}/decrease
+    pub async fn decrease_order(&self, order_id: &str, req: DecreaseOrderRequest) -> Result<Order, KalshiError> {
         let path = format!("{}/orders/{}/decrease", PORTFOLIO_PATH, order_id);
-
-        // response is now { "order": { … }, "reduced_by": int }
-        let result: DecreaseOrderResponse = self.signed_post(&path, &decrease_payload).await?;
+        let result: DecreaseOrderResponse = self.signed_post(&path, &req).await?;
         Ok(result.order)
     }
 
@@ -487,98 +465,9 @@ impl<'a> Kalshi {
     /// ```
     ///
     
-    // TODO: rewrite using generics
-    pub async fn create_order(
-        &self,
-        action: Action,
-        client_order_id: Option<String>,
-        count: Option<i32>,
-        side: Side,
-        ticker: String,
-        input_type: OrderType,
-        buy_max_cost: Option<i64>,
-        expiration_ts: Option<i64>,
-        yes_price: Option<i64>,
-        no_price: Option<i64>,
-        sell_position_floor: Option<i32>,
-        yes_price_dollars: Option<String>,
-        no_price_dollars: Option<String>,
-        count_fp: Option<String>,
-    ) -> Result<Order, KalshiError> {
-        // Either count or count_fp must be present, but not both.
-        if count.is_some() && count_fp.is_some() {
-            return Err(KalshiError::UserInputError(
-                "Cannot provide both count and count_fp".to_string(),
-            ));
-        }
-        if count.is_none() && count_fp.is_none() {
-            return Err(KalshiError::UserInputError(
-                "Must provide either count or count_fp".to_string(),
-            ));
-        }
-
-        match input_type {
-            OrderType::Limit => {
-                // Check if user provided both cent and dollar prices for the same side
-                if yes_price.is_some() && yes_price_dollars.is_some() {
-                    return Err(KalshiError::UserInputError(
-                        "Cannot provide both yes_price and yes_price_dollars".to_string(),
-                    ));
-                }
-                if no_price.is_some() && no_price_dollars.is_some() {
-                    return Err(KalshiError::UserInputError(
-                        "Cannot provide both no_price and no_price_dollars".to_string(),
-                    ));
-                }
-                
-                // Check if any price is provided
-                let has_price = yes_price.is_some() 
-                    || no_price.is_some() 
-                    || yes_price_dollars.is_some() 
-                    || no_price_dollars.is_some();
-                
-                if !has_price {
-                    return Err(KalshiError::UserInputError(
-                        "Must provide a price (yes_price, no_price, yes_price_dollars, or no_price_dollars)".to_string(),
-                    ));
-                }
-                
-                // Check if both yes and no prices are provided
-                let has_yes = yes_price.is_some() || yes_price_dollars.is_some();
-                let has_no = no_price.is_some() || no_price_dollars.is_some();
-                if has_yes && has_no {
-                    return Err(KalshiError::UserInputError(
-                        "Can only provide yes price or no price, not both".to_string(),
-                    ));
-                }
-            },
-            _ => {}
-        }
-
-        let unwrapped_id = match client_order_id {
-            Some(id) => id,
-            _ => String::from(Uuid::new_v4()),
-        };
-
-        let order_payload = CreateOrderPayload {
-            action: action,
-            client_order_id: unwrapped_id,
-            count: count,
-            count_fp: count_fp,
-            side: side,
-            ticker: ticker,
-            r#type: input_type,
-            buy_max_cost: buy_max_cost,
-            expiration_ts: expiration_ts,
-            yes_price: yes_price,
-            no_price: no_price,
-            sell_position_floor: sell_position_floor,
-            yes_price_dollars: yes_price_dollars,
-            no_price_dollars: no_price_dollars,
-        };
-
+    pub async fn create_order(&self, req: CreateOrderRequest) -> Result<Order, KalshiError> {
         let path = format!("{}/orders", PORTFOLIO_PATH);
-        let result: SingleOrderResponse = self.signed_post(&path, &order_payload).await?;
+        let result: SingleOrderResponse = self.signed_post(&path, &req).await?;
         Ok(result.order)
     }
 
@@ -587,7 +476,7 @@ impl<'a> Kalshi {
     // -----------------------------------------------------------------
     pub async fn batch_create_order(
         &self,
-        batch: Vec<OrderCreationField>,
+        batch: Vec<CreateOrderRequest>,
     ) -> Result<Vec<Result<Order, KalshiError>>, KalshiError> {
         if batch.is_empty() {
             return Ok(Vec::new());
@@ -598,54 +487,10 @@ impl<'a> Kalshi {
             ));
         }
 
-        // Convert the user-supplied OrderCreationField into raw payloads -----------------
-        let orders: Vec<CreateOrderPayload> = batch
-            .into_iter()
-            .map(|field| {
-                // unpack the helper struct
-                let (
-                    action,
-                    client_order_id,
-                    count,
-                    side,
-                    ticker,
-                    input_type,
-                    buy_max_cost,
-                    expiration_ts,
-                    yes_price,
-                    no_price,
-                    sell_position_floor,
-                    yes_price_dollars,
-                    no_price_dollars,
-                    count_fp,
-                ) = field.get_params();
-
-                CreateOrderPayload {
-                    action,
-                    client_order_id: client_order_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
-                    count,
-                    count_fp,
-                    side,
-                    ticker,
-                    r#type: input_type,
-                    buy_max_cost,
-                    expiration_ts,
-                    yes_price,
-                    no_price,
-                    sell_position_floor,
-                    yes_price_dollars,
-                    no_price_dollars,
-                }
-            })
-            .collect();
-
         let path = format!("{}/orders/batched", PORTFOLIO_PATH);
-        let body = BatchCreateOrderPayload { orders };
-
-        // NB: signed_post already injects auth headers & error mapping
+        let body = BatchCreateOrderPayload { orders: batch };
         let response: BatchCreateOrdersResponse = self.signed_post(&path, &body).await?;
 
-        // Convert the wire format into Vec<Result<…>>
         let mut out = Vec::with_capacity(response.orders.len());
         for item in response.orders {
             match (item.order, item.error) {
@@ -911,18 +756,9 @@ impl<'a> Kalshi {
     /// ).await.unwrap();
     /// ```
     ///
-    pub async fn amend_order(
-        &self,
-        order_id: &str,
-        new_price: Option<i32>,
-        new_quantity: Option<i32>,
-    ) -> Result<Order, KalshiError> {
+    pub async fn amend_order(&self, order_id: &str, req: AmendOrderRequest) -> Result<Order, KalshiError> {
         let path = format!("/portfolio/orders/{}/amend", order_id);
-        let body = AmendOrderRequest {
-            new_price,
-            new_quantity,
-        };
-        let res: SingleOrderResponse = self.signed_post(&path, &body).await?;
+        let res: SingleOrderResponse = self.signed_post(&path, &req).await?;
         Ok(res.order)
     }
 
@@ -951,6 +787,133 @@ impl<'a> Kalshi {
     pub async fn get_order_queue_position(&self, order_id: &str) -> Result<OrderQueuePosition, KalshiError> {
         let path = format!("/portfolio/orders/{}/queue_position", order_id);
         self.signed_get(&path).await
+    }
+
+    /// Retrieves queue positions for all resting orders, optionally filtered.
+    ///
+    /// # Arguments
+    /// * `market_tickers` - Optional comma-separated list of market tickers to filter by.
+    /// * `event_ticker` - Optional event ticker to filter by.
+    pub async fn get_order_queue_positions(
+        &self,
+        market_tickers: Option<String>,
+        event_ticker: Option<String>,
+    ) -> Result<Vec<OrderQueuePosition>, KalshiError> {
+        let mut params: Vec<(&str, String)> = Vec::new();
+        add_param!(params, "market_tickers", market_tickers);
+        add_param!(params, "event_ticker", event_ticker);
+
+        let path = if params.is_empty() {
+            format!("{}/orders/queue_positions", PORTFOLIO_PATH)
+        } else {
+            let qs = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&");
+            format!("{}/orders/queue_positions?{}", PORTFOLIO_PATH, qs)
+        };
+
+        let res: QueuePositionsResponse = self.signed_get(&path).await?;
+        Ok(res.queue_positions)
+    }
+
+    /// Updates the contracts limit on an order group.
+    ///
+    /// If the new limit would immediately trigger the group, all orders are cancelled.
+    pub async fn update_order_group_limit(
+        &self,
+        order_group_id: &str,
+        contracts_limit: i32,
+    ) -> Result<(), KalshiError> {
+        let path = format!("{}/order_groups/{}/limit", PORTFOLIO_PATH, order_group_id);
+        let body = UpdateOrderGroupLimitRequest { contracts_limit };
+        let _: serde_json::Value = self.signed_put(&path, Some(&body)).await?;
+        Ok(())
+    }
+
+    /// Triggers an order group, cancelling all orders in it until reset.
+    pub async fn trigger_order_group(&self, order_group_id: &str) -> Result<(), KalshiError> {
+        let path = format!("{}/order_groups/{}/trigger", PORTFOLIO_PATH, order_group_id);
+        let _: serde_json::Value = self.signed_put::<(), serde_json::Value>(&path, None).await?;
+        Ok(())
+    }
+
+    // -------- Subaccount endpoints --------
+
+    /// Creates a new subaccount. Subaccounts are numbered 1–32.
+    pub async fn create_subaccount(&self) -> Result<CreateSubaccountResponse, KalshiError> {
+        let path = format!("{}/subaccounts", PORTFOLIO_PATH);
+        self.signed_post(&path, &()).await
+    }
+
+    /// Retrieves balances for all subaccounts including the primary.
+    pub async fn get_subaccount_balances(&self) -> Result<Vec<SubaccountBalance>, KalshiError> {
+        let path = format!("{}/subaccounts/balances", PORTFOLIO_PATH);
+        let res: SubaccountBalancesResponse = self.signed_get(&path).await?;
+        Ok(res.subaccount_balances)
+    }
+
+    /// Retrieves netting configuration for all subaccounts.
+    pub async fn get_subaccount_netting(&self) -> Result<Vec<SubaccountNettingConfig>, KalshiError> {
+        let path = format!("{}/subaccounts/netting", PORTFOLIO_PATH);
+        let res: SubaccountNettingResponse = self.signed_get(&path).await?;
+        Ok(res.subaccount_netting_configs)
+    }
+
+    /// Updates the netting setting for a specific subaccount.
+    ///
+    /// Use `subaccount_number = 0` for the primary account, 1–32 for subaccounts.
+    pub async fn update_subaccount_netting(
+        &self,
+        subaccount_number: i64,
+        enabled: bool,
+    ) -> Result<(), KalshiError> {
+        let path = format!("{}/subaccounts/netting", PORTFOLIO_PATH);
+        let body = UpdateSubaccountNettingRequest { subaccount_number, enabled };
+        let _: serde_json::Value = self.signed_put(&path, Some(&body)).await?;
+        Ok(())
+    }
+
+    /// Transfers funds between subaccounts.
+    ///
+    /// Use `0` for primary account, `1`–`32` for numbered subaccounts.
+    pub async fn apply_subaccount_transfer(
+        &self,
+        amount_cents: i64,
+        from_subaccount: i64,
+        to_subaccount: i64,
+        client_transfer_id: Option<String>,
+    ) -> Result<i64, KalshiError> {
+        let path = format!("{}/subaccounts/transfer", PORTFOLIO_PATH);
+        let body = ApplySubaccountTransferRequest {
+            amount_cents,
+            from_subaccount,
+            to_subaccount,
+            client_transfer_id,
+        };
+        let res: SubaccountTransferResponse = self.signed_post(&path, &body).await?;
+        Ok(res.balance)
+    }
+
+    /// Retrieves a paginated list of all subaccount transfers.
+    pub async fn get_subaccount_transfers(
+        &self,
+        limit: Option<i64>,
+        cursor: Option<String>,
+    ) -> Result<(Option<String>, Vec<SubaccountTransfer>), KalshiError> {
+        let mut params: Vec<(&str, String)> = Vec::new();
+        add_param!(params, "limit", limit);
+        add_param!(params, "cursor", cursor);
+
+        let path = if params.is_empty() {
+            format!("{}/subaccounts/transfers", PORTFOLIO_PATH)
+        } else {
+            let qs = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&");
+            format!("{}/subaccounts/transfers?{}", PORTFOLIO_PATH, qs)
+        };
+
+        let res: SubaccountTransfersListResponse = self.signed_get(&path).await?;
+        Ok((
+            if res.cursor.is_empty() { None } else { Some(res.cursor) },
+            res.transfers,
+        ))
     }
 }
 
@@ -998,12 +961,6 @@ struct DecreaseOrderResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct DecreaseOrderPayload {
-    reduce_by: Option<i32>,
-    reduce_to: Option<i32>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
 struct MultipleFillsResponse {
     fills: Vec<Fill>,
     cursor: Option<String>,
@@ -1022,493 +979,10 @@ struct GetPositionsResponse {
     market_positions: Vec<MarketPosition>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct CreateOrderPayload {
-    action: Action,
-    client_order_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    count: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub count_fp: Option<String>,
-    side: Side,
-    ticker: String,
-    r#type: OrderType,
-    buy_max_cost: Option<i64>,
-    expiration_ts: Option<i64>,
-    yes_price: Option<i64>,
-    no_price: Option<i64>,
-    sell_position_floor: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    yes_price_dollars: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    no_price_dollars: Option<String>,
-}
-
-// PUBLIC STRUCTS
-// -------------------------
-
-/// Represents an order in the Kalshi exchange.
-///
-/// This struct details an individual order, including its identification, status, prices, and various metrics related to its lifecycle.
-///
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Order {
-    /// Unique identifier for the order.
-    pub order_id: String,
-    /// Identifier of the user who placed the order. Optional.
-    #[serde(default)]
-    pub user_id: Option<String>,
-    /// Ticker of the market associated with the order.
-    pub ticker: String,
-    /// Current status of the order (e.g., resting, executed).
-    pub status: OrderStatus,
-    /// Price of the 'Yes' option in the order (cents, legacy; may be omitted).
-    #[serde(default)]
-    pub yes_price: Option<i32>,
-    /// Price of the 'No' option in the order (cents, legacy; may be omitted).
-    #[serde(default)]
-    pub no_price: Option<i32>,
-
-    /// Timestamp when the order was created. Optional.
-    #[serde(default)]
-    pub created_time: Option<String>,
-    /// Last update time of the order. Optional.
-    #[serde(default)]
-    pub last_update_time: Option<String>,
-    /// Expiration time of the order. Optional (often null).
-    #[serde(default)]
-    pub expiration_time: Option<String>,
-
-    // === Counts / queue ===
-    /// Total fills (Kalshi now reports a single `fill_count`).
-    #[serde(default)]
-    pub fill_count: Option<i32>,
-    /// Initial order size.
-    #[serde(default)]
-    pub initial_count: Option<i32>,
-    /// Remaining count of the order. Optional.
-    #[serde(default)]
-    pub remaining_count: Option<i32>,
-    /// Position of the order in the queue. Optional.
-    #[serde(default)]
-    pub queue_position: Option<i32>,
-
-    // === Legacy/optional counters kept for back-compat (often missing) ===
-    #[serde(default)]
-    pub taker_fill_count: Option<i32>,
-    #[serde(default)]
-    pub place_count: Option<i32>,
-    #[serde(default)]
-    pub decrease_count: Option<i32>,
-    #[serde(default)]
-    pub maker_fill_count: Option<i32>,
-    #[serde(default)]
-    pub fcc_cancel_count: Option<i32>,
-    #[serde(default)]
-    pub close_cancel_count: Option<i32>,
-
-    // === Fees / costs ===
-    /// Fees incurred as a taker (cents).
-    #[serde(default)]
-    pub taker_fees: Option<i32>,
-    /// Taker fees in dollars (string, sometimes null).
-    #[serde(default)]
-    pub taker_fees_dollars: Option<String>,
-
-    /// Total cost of taker fills (cents).
-    #[serde(default)]
-    pub taker_fill_cost: Option<i32>,
-    /// Taker fill cost in dollars (string).
-    #[serde(default)]
-    pub taker_fill_cost_dollars: Option<String>,
-
-    /// Maker fees (cents).
-    #[serde(default)]
-    pub maker_fees: Option<i32>,
-    /// Maker fees in dollars (string, sometimes null).
-    #[serde(default)]
-    pub maker_fees_dollars: Option<String>,
-
-    /// Total cost of maker fills (cents).
-    #[serde(default)]
-    pub maker_fill_cost: Option<i32>,
-    /// Maker fill cost in dollars (string).
-    #[serde(default)]
-    pub maker_fill_cost_dollars: Option<String>,
-
-    // === Price (dollar string facades Kalshi now sends) ===
-    #[serde(default)]
-    pub yes_price_dollars: Option<String>,
-    #[serde(default)]
-    pub no_price_dollars: Option<String>,
-
-    // === Identifiers ===
-    pub action: Action,
-    pub side: Side,
-    /// Type of the order (e.g., "limit").
-    #[serde(rename = "type")]
-    pub r#type: String,
-    /// Client-side identifier for the order.
-    pub client_order_id: String,
-    /// Group identifier for the order (now nullable).
-    #[serde(default)]
-    pub order_group_id: Option<String>,
-
-    // === Misc newly-seen ===
-    /// Self-trade prevention type (nullable).
-    #[serde(default)]
-    pub self_trade_prevention_type: Option<String>,
-}
-
-/// A completed transaction (a 'fill') in the Kalshi exchange.
-///
-/// This struct details a single fill instance, including the action taken, the quantity,
-/// the involved prices, and the identifiers of the order and trade.
-///
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Fill {
-    /// The action (buy/sell) of the fill.
-    pub action: Action,
-    /// The number of contracts or shares involved in the fill.
-    pub count: i32,
-    /// The timestamp when the fill was created.
-    pub created_time: String,
-    /// Indicates if the fill was made by a taker.
-    pub is_taker: bool,
-    /// The price of the 'No' option in the fill.
-    pub no_price: i64,
-    /// The identifier of the associated order.
-    pub order_id: String,
-    /// The side (Yes/No) of the fill.
-    pub side: Side,
-    /// The ticker of the market in which the fill occurred.
-    pub ticker: String,
-    /// The unique identifier of the trade.
-    pub trade_id: String,
-    /// The price of the 'Yes' option in the fill.
-    pub yes_price: i64,
-}
-
-/// A settlement of a market position in the Kalshi exchange.
-///
-/// This struct provides details of a market settlement, including the result, quantities,
-/// costs involved, and the timestamp of settlement.
-///
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Settlement {
-    /// The result of the market settlement.
-    pub market_result: String,
-    /// The quantity involved in the 'No' position.
-    pub no_count: i64,
-    /// The total cost associated with the 'No' position.
-    pub no_total_cost: i64,
-    /// The revenue generated from the settlement, in cents.
-    pub revenue: i64,
-    /// The timestamp when the settlement occurred.
-    pub settled_time: String,
-    /// The ticker of the market that was settled.
-    pub ticker: String,
-    /// The quantity involved in the 'Yes' position.
-    pub yes_count: i64,
-    /// The total cost associated with the 'Yes' position, in cents.
-    pub yes_total_cost: i64,
-}
-
-/// A user's position in a specific event on the Kalshi exchange.
-///
-/// Details the user's exposure, costs, profits, and the number of resting orders related to a particular event.
-///
-#[derive(Debug, Deserialize, Serialize)]
-pub struct EventPosition {
-    /// The ticker of the event.
-    pub event_ticker: String,
-    /// The total cost incurred in the event in cents.
-    #[serde(default)]
-    pub total_cost: i64,
-    /// Total spent on this event in dollars
-    pub total_cost_dollars: String,
-    /// Total number of shares traded on this event (including both YES and NO contracts)
-    #[serde(default)]
-    pub total_cost_shares: i64,
-    /// String representation of the total number of shares traded on this event
-    pub total_cost_shares_fp: String,
-    /// The total exposure amount in the event in cents.
-    #[serde(default)]
-    pub event_exposure: i64,
-    /// Cost of the aggregate event position in dollars
-    pub event_exposure_dollars: String,
-    /// The realized profit or loss in the event in cents.
-    #[serde(default)]
-    pub realized_pnl: i64,
-    /// Locked in profit and loss, in dollars
-    pub realized_pnl_dollars: String,
-    /// The total fees paid in the event in cents.
-    #[serde(default)]
-    pub fees_paid: i64,
-    /// Fees paid on fill orders, in dollars
-    pub fees_paid_dollars: String,
-    /// The count of resting (active but unfilled) orders in the event.
-    #[serde(default)]
-    pub resting_order_count: Option<i32>,
-}
-
-/// A user's position in a specific market on the Kalshi exchange.
-///
-/// This struct includes details about the user's market position, including exposure, fees,
-/// profits, and the number of resting orders.
-///
-#[derive(Debug, Deserialize, Serialize)]
-pub struct MarketPosition {
-    /// The ticker of the market.
-    pub ticker: String,
-    /// The total traded amount in the market in cents.
-    #[serde(default)]
-    pub total_traded: i64,
-    /// Total spent on this market in dollars
-    pub total_traded_dollars: String,
-    /// The current position of the user in the market.
-    #[serde(default)]
-    pub position: i32,
-    /// String representation of the number of contracts bought in this market.
-    pub position_fp: String,
-    /// The total exposure amount in the market in cents.
-    #[serde(default)]
-    pub market_exposure: i64,
-    /// Cost of the aggregate market position in dollars
-    pub market_exposure_dollars: String,
-    /// The realized profit or loss in the market in cents.
-    #[serde(default)]
-    pub realized_pnl: i64,
-    /// Locked in profit and loss, in dollars
-    pub realized_pnl_dollars: String,
-    /// The total fees paid in the market in cents.
-    #[serde(default)]
-    pub fees_paid: i64,
-    /// Fees paid on fill orders, in dollars
-    pub fees_paid_dollars: String,
-    /// The count of resting orders in the market.
-    #[serde(default)]
-    pub resting_orders_count: Option<i32>,
-    /// Last time the position is updated
-    pub last_updated_ts: Option<String>,
-}
-
-/// Represents the necessary fields for creating an order in the Kalshi exchange.
-///
-/// This struct is used to encapsulate all the data needed to create a new order. It includes details about the order type,
-/// the action being taken (buy/sell), the market ticker, and various other optional parameters that can be specified
-/// to fine-tune the order according to the user's needs.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct OrderCreationField {
-    /// The action (buy/sell) of the order.
-    pub action: Action,
-    /// Client-side identifier for the order. Optional.
-    pub client_order_id: Option<String>,
-    /// The number of contracts or shares involved in the order. (LEGACY)
-    pub count: Option<i32>,
-    /// The number of contracts or shares involved in the order in fixed-point string format. Optional.
-    pub count_fp: Option<String>,
-    /// The side (Yes/No) of the order.
-    pub side: Side,
-    /// Ticker of the market associated with the order.
-    pub ticker: String,
-    /// Type of the order (e.g., market, limit).
-    pub input_type: OrderType,
-    /// The maximum cost the buyer is willing to incur for a 'buy' action. Optional.
-    pub buy_max_cost: Option<i64>,
-    /// Expiration time of the order. Optional.
-    pub expiration_ts: Option<i64>,
-    /// Price of the 'Yes' option in the order (in cents). Optional.
-    pub yes_price: Option<i64>,
-    /// Price of the 'No' option in the order (in cents). Optional.
-    pub no_price: Option<i64>,
-    /// The minimum position the seller is willing to hold after selling. Optional.
-    pub sell_position_floor: Option<i32>,
-    /// Price of the 'Yes' option in dollars (e.g., "0.5000"). Optional.
-    pub yes_price_dollars: Option<String>,
-    /// Price of the 'No' option in dollars (e.g., "0.5000"). Optional.
-    pub no_price_dollars: Option<String>,
-}
-
-impl OrderParams for OrderCreationField {
-    fn get_params(
-        self,
-    ) -> (
-        Action,
-        Option<String>,
-        Option<i32>,
-        Side,
-        String,
-        OrderType,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i32>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    ) {
-        (
-            self.action,
-            self.client_order_id,
-            self.count,
-            self.side,
-            self.ticker,
-            self.input_type,
-            self.buy_max_cost,
-            self.expiration_ts,
-            self.yes_price,
-            self.no_price,
-            self.sell_position_floor,
-            self.yes_price_dollars,
-            self.no_price_dollars,
-            self.count_fp,
-        )
-    }
-}
-
-/// The side of a market position in the Kalshi exchange.
-///
-/// This enum is used to indicate whether a market position, order, or trade is associated with the 'Yes' or 'No' outcome of a market event.
-///
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Side {
-    /// Represents a position, order, or trade associated with the 'Yes' outcome of a market event.
-    Yes,
-    /// Represents a position, order, or trade associated with the 'No' outcome of a market event.
-    No,
-}
-
-/// This enum is used to specify the type of action a user wants to take in an order, either buying or selling.
-///
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Action {
-    /// Represents a buy action.
-    Buy,
-    /// Represents a sell action.
-    Sell,
-}
-
-impl fmt::Display for Action {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Action::Buy => write!(f, "buy"),
-            Action::Sell => write!(f, "sell"),
-        }
-    }
-}
-
-/// The status of an order in the Kalshi exchange.
-///
-/// This enum categorizes an order's lifecycle state, from creation to completion or cancellation.
-///
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum OrderStatus {
-    /// The order is active but not yet filled or partially filled and still in the order book.
-    Resting,
-    /// The order has been canceled and is no longer active.
-    Canceled,
-    /// The order has been fully executed.
-    Executed,
-    /// The order has been created and is awaiting further processing.
-    Pending,
-}
-
-impl fmt::Display for OrderStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            OrderStatus::Resting => write!(f, "resting"),
-            OrderStatus::Canceled => write!(f, "cancelled"),
-            OrderStatus::Executed => write!(f, "executed"),
-            OrderStatus::Pending => write!(f, "pending"),
-        }
-    }
-}
-
-/// Defines the type of an order in the Kalshi exchange.
-///
-/// This enum is used to specify the nature of the order, particularly how it interacts with the market.
-///
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum OrderType {
-    /// A market order is executed immediately at the current market price.
-    Market,
-    /// A limit order is set to be executed at a specific price or better.
-    Limit,
-}
-
-trait OrderParams {
-    fn get_params(
-        self,
-    ) -> (
-        Action,
-        Option<String>,
-        Option<i32>,
-        Side,
-        String,
-        OrderType,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i32>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    );
-}
-
-impl OrderParams
-    for (
-        Action,
-        Option<String>,
-        Option<i32>,
-        Side,
-        String,
-        OrderType,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i32>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )
-{
-    fn get_params(
-        self,
-    ) -> (
-        Action,
-        Option<String>,
-        Option<i32>,
-        Side,
-        String,
-        OrderType,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i32>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    ) {
-        (
-            self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7, self.8, self.9, self.10, self.11, self.12, self.13,
-        )
-    }
-}
-
 /// Payload for POST /portfolio/orders/batched
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 struct BatchCreateOrderPayload {
-    orders: Vec<CreateOrderPayload>,
+    orders: Vec<CreateOrderRequest>,
 }
 
 /// Payload for DELETE /portfolio/orders/batched
@@ -1548,7 +1022,7 @@ struct BatchCancelOrdersResponse {
     orders: Vec<BatchCancelOrderResponseItem>,
 }
 
-// -------- New Portfolio Endpoints Structs --------
+// -------- Private response/request wrappers --------
 
 #[derive(Debug, Deserialize)]
 struct TotalRestingOrderValueResponse {
@@ -1573,31 +1047,51 @@ struct OrderGroupResponse {
 #[derive(Debug, Deserialize)]
 struct DeleteOrderGroupResponse {}
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct OrderGroup {
-    pub id: String,
-    pub contracts_limit: i32,
-    pub total_contracts: Option<i32>,
-    pub order_ids: Vec<String>,
-    pub created_time: String,
-}
-
 #[derive(Debug, Deserialize)]
 struct QueuePositionsResponse {
     queue_positions: Vec<OrderQueuePosition>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct OrderQueuePosition {
-    pub order_id: String,
-    pub queue_position: Option<i64>,
-    pub total_queue_depth: Option<i64>,
+#[derive(Debug, Serialize)]
+struct UpdateOrderGroupLimitRequest {
+    contracts_limit: i32,
 }
 
 #[derive(Debug, Serialize)]
-struct AmendOrderRequest {
-    new_price: Option<i32>,
-    new_quantity: Option<i32>,
+struct ApplySubaccountTransferRequest {
+    amount_cents: i64,
+    from_subaccount: i64,
+    to_subaccount: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_transfer_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SubaccountTransferResponse {
+    balance: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateSubaccountNettingRequest {
+    subaccount_number: i64,
+    enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SubaccountBalancesResponse {
+    subaccount_balances: Vec<SubaccountBalance>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SubaccountNettingResponse {
+    subaccount_netting_configs: Vec<SubaccountNettingConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SubaccountTransfersListResponse {
+    #[serde(default)]
+    cursor: String,
+    transfers: Vec<SubaccountTransfer>,
 }
 
 #[cfg(test)]

@@ -111,6 +111,7 @@
 
 #[macro_use]
 mod utils;
+pub mod generated;
 mod auth;
 mod api_keys;
 mod collection;
@@ -118,6 +119,7 @@ mod communications;
 mod events;
 mod exchange;
 mod fcm;
+mod historical;
 mod incentive_programs;
 mod kalshi_error;
 mod live_data;
@@ -127,13 +129,13 @@ mod portfolio;
 mod search;
 mod structured_targets;
 
-// pub use auth::*;  // Unused import
 pub use api_keys::*;
 pub use collection::*;
 pub use communications::*;
 pub use events::*;
 pub use exchange::*;
-pub use fcm::FcmPosition; // Only export the specific type, not all
+pub use fcm::FcmPosition;
+pub use historical::*;
 pub use incentive_programs::*;
 pub use kalshi_error::*;
 pub use live_data::*;

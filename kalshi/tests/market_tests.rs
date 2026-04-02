@@ -25,7 +25,7 @@ async fn test_get_events() {
     let kalshi = setup_auth_test().await.unwrap();
     
     // Test getting events with limit
-    let result = kalshi.get_events(Some(5), None, None, None, None).await;
+    let result = kalshi.get_events(Some(5), None, None, None, None, None, None).await;
     assert!(result.is_ok(), "Failed to get events: {:?}", result.err());
     
     let (_cursor, events) = result.unwrap();
@@ -39,14 +39,11 @@ async fn test_get_series_list() {
     // Test getting series list
     let result = kalshi.get_series_list(None, None, None, None).await;
     match result {
-        Ok((cursor, series)) => {
-            println!("Series list test successful - cursor: {:?}, series count: {}", cursor, series.len());
-            // Even if no series are returned, that's still a valid response
-            assert!(true, "Successfully got series list");
+        Ok(series) => {
+            println!("Series list test successful - series count: {}", series.len());
         }
         Err(e) => {
-            println!("Series list error: {:?}", e);
-            assert!(false, "Failed to get series list: {:?}", e);
+            panic!("Failed to get series list: {:?}", e);
         }
     }
 }
@@ -70,4 +67,24 @@ async fn test_get_trades() {
     // Test getting trades
     let result = kalshi.get_trades(None, None, None, None, None).await;
     assert!(result.is_ok(), "Failed to get trades: {:?}", result.err());
+}
+
+#[tokio::test]
+async fn test_get_market_orderbooks() {
+    let kalshi = setup_auth_test().await.unwrap();
+
+    let tickers = &["KXPRESNOMD-28-GN", "KXPRESNOMD-28-JOSS"];
+    let result = kalshi.get_market_orderbooks(tickers).await;
+    assert!(result.is_ok(), "Failed to get orderbooks: {:?}", result.err());
+
+    let orderbooks = result.unwrap();
+    assert_eq!(orderbooks.len(), 2, "Expected orderbooks for both tickers");
+
+    for ob in &orderbooks {
+        eprintln!(
+            "\n--- Orderbook: {} ---\n  yes_dollars: {:?}\n  no_dollars:  {:?}",
+            ob.ticker, ob.orderbook_fp.yes_dollars, ob.orderbook_fp.no_dollars
+        );
+        assert!(!ob.ticker.is_empty(), "Ticker should not be empty");
+    }
 }

@@ -2,6 +2,11 @@ use super::Kalshi;
 use crate::kalshi_error::*;
 use serde::{Deserialize, Serialize};
 
+pub use crate::generated::types::{
+    ApiKey, CreateApiKeyResponse, GetAccountApiLimitsResponse as AccountApiLimits,
+    GetApiKeysResponse,
+};
+
 impl Kalshi {
     /// Retrieves all API keys for the authenticated user.
     ///
@@ -22,8 +27,8 @@ impl Kalshi {
     ///
     pub async fn get_api_keys(&self) -> Result<Vec<ApiKey>, KalshiError> {
         let path = "/api_keys";
-        let res: ApiKeysResponse = self.signed_get(path).await?;
-        Ok(res.keys)
+        let res: GetApiKeysResponse = self.signed_get(path).await?;
+        Ok(res.api_keys)
     }
 
     /// Creates a new API key.
@@ -48,11 +53,9 @@ impl Kalshi {
     /// println!("Save this secret: {}", new_key.secret);
     /// ```
     ///
-    pub async fn create_api_key(&self, label: &str) -> Result<ApiKeyCreated, KalshiError> {
+    pub async fn create_api_key(&self, name: &str) -> Result<CreateApiKeyResponse, KalshiError> {
         let path = "/api_keys";
-        let body = CreateApiKeyRequest {
-            label: label.to_string(),
-        };
+        let body = CreateApiKeyRequest { name: name.to_string() };
         self.signed_post(path, &body).await
     }
 
@@ -77,7 +80,7 @@ impl Kalshi {
     /// let new_secret = kalshi_instance.generate_api_key("key-uuid").await.unwrap();
     /// ```
     ///
-    pub async fn generate_api_key(&self, key_id: &str) -> Result<ApiKeySecret, KalshiError> {
+    pub async fn generate_api_key(&self, key_id: &str) -> Result<serde_json::Value, KalshiError> {
         let path = format!("/api_keys/{}/generate", key_id);
         self.signed_post(&path, &()).await
     }
@@ -108,59 +111,22 @@ impl Kalshi {
         let _res: DeleteApiKeyResponse = self.signed_delete(&path).await?;
         Ok(())
     }
+
+    /// Retrieves the API rate-limit tier for the authenticated user.
+    pub async fn get_account_api_limits(&self) -> Result<AccountApiLimits, KalshiError> {
+        self.signed_get("/account/api_limits").await
+    }
 }
 
 // -------- Request bodies --------
 
 #[derive(Debug, Serialize)]
 struct CreateApiKeyRequest {
-    label: String,
+    name: String,
 }
 
 // -------- Response wrappers --------
 
 #[derive(Debug, Deserialize)]
-struct ApiKeysResponse {
-    keys: Vec<ApiKey>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DeleteApiKeyResponse {
-    // Empty response or success message
-}
-
-// -------- Public models --------
-
-/// Represents an API key (without the secret).
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ApiKey {
-    /// The unique identifier for the API key.
-    pub key_id: String,
-    /// The descriptive label for the API key.
-    pub label: String,
-    /// The creation timestamp.
-    pub created_time: String,
-    /// Whether the key is currently active.
-    pub is_active: bool,
-}
-
-/// Represents a newly created API key with its secret.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ApiKeyCreated {
-    /// The unique identifier for the API key.
-    pub key_id: String,
-    /// The descriptive label for the API key.
-    pub label: String,
-    /// The API key secret (only shown once).
-    pub secret: String,
-    /// The creation timestamp.
-    pub created_time: String,
-}
-
-/// Represents a regenerated API key secret.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ApiKeySecret {
-    /// The API key secret.
-    pub secret: String,
-}
+struct DeleteApiKeyResponse {}
 

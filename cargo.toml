@@ -1,2 +1,6 @@
 [workspace]
 members = ["kalshi", "sample_bot"]
+resolver = "2"
+
+[patch.crates-io]
+progenitor-impl = { path = "vendor/progenitor-impl" }

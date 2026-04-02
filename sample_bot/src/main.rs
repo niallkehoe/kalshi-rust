@@ -1,6 +1,7 @@
 use dotenv::dotenv;
-use kalshi::Kalshi;
+use kalshi::{CreateOrderRequest, CreateOrderRequestAction, CreateOrderRequestSide, Kalshi};
 use std::env;
+use std::num::NonZeroU64;
 
 extern crate kalshi;
 
@@ -53,23 +54,29 @@ async fn main() {
     let nytemp_market_orderbook = kalshi_instance.get_orderbook(&new_york_ticker, Some(10)).await.unwrap();
 
 
-      let bought_order = kalshi_instance
-        .create_order(
-            kalshi::Action::Buy,
-            None,
-            None,
-            kalshi::Side::Yes,
-            new_york_ticker,
-            kalshi::OrderType::Limit,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("0.05".to_string()),
-            None,
-            Some("1.00".to_string()),
-        )
+    let bought_order = kalshi_instance
+        .create_order(CreateOrderRequest {
+            action: CreateOrderRequestAction::Buy,
+            side: CreateOrderRequestSide::Yes,
+            ticker: new_york_ticker,
+            yes_price: Some(NonZeroU64::new(5).unwrap()), // 5 cents
+            count: Some(NonZeroU64::new(1).unwrap()),
+            buy_max_cost: None,
+            cancel_order_on_pause: None,
+            client_order_id: None,
+            count_fp: None,
+            expiration_ts: None,
+            no_price: None,
+            no_price_dollars: None,
+            order_group_id: None,
+            post_only: None,
+            reduce_only: None,
+            self_trade_prevention_type: None,
+            sell_position_floor: None,
+            subaccount: 0,
+            time_in_force: None,
+            yes_price_dollars: None,
+        })
         .await
         .unwrap();
 
